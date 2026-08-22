@@ -1,0 +1,14 @@
+List of gestures with the acronym:
+
+1.  Thumb_UP    = TU
+2.  Index       = IDX
+3.  Right_Angle = RA
+4.  Peace       = PCE
+5.  Index_Little = IL
+6.  Thumb_Little = TL
+7.  Hand_Close   = HC
+8.  Hand_Open    = HO
+9.  Wrist_Extension = WE
+10. Wrist_Flexion  = WF
+11. Ulner_Deviation = UD
+12. Radial_Deviation =RD
