@@ -13,7 +13,6 @@ torch.manual_seed(42)
 torch.backends.cudnn.deterministic = True
 np.random.seed(42)
 
-#sexual
 
 
 #Changing the base directory to that of the Dataset
