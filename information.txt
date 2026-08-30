@@ -1,0 +1,346 @@
+================================================================================
+FORS-EMG TinyML PROJECT — COMPLETE TECHNICAL REFERENCE
+================================================================================
+
+
+--------------------------------------------------------------------------------
+1. DATASET — FORS-EMG (arXiv:2409.07484)
+--------------------------------------------------------------------------------
+
+Paper           : Rumman et al., 2024  (arXiv:2409.07484)
+Subjects        : 19 able-bodied (16 male, 3 female, ages 25-40)
+Electrodes      : 8 MFI sEMG channels
+Placement       : CH1-CH4 at elbow region, CH5-CH8 at mid-forearm
+Sampling rate   : 985 Hz, 10-bit ADC resolution
+SNR             : Up to 35 dB
+Total gestures  : 12 (3 single-finger, 5 multi-finger, 4 wrist)
+Orientations    : 3 — Rest (neutral), Supination (palm up), Pronation (palm down)
+Trials          : 5 per gesture per orientation
+Duration        : ~8.1 seconds per trial (8,000 samples @ 985 Hz)
+Raw file shape  : (8000, 8) — float64 matrix per .mat file
+
+Gestures used in this project (classes 0-3 only):
+  [0] Hand Close     — Multi-finger (power grasp)
+  [1] Hand Open      — Multi-finger (full extension)
+  [2] Index          — Single-finger isolation
+  [3] Index-Little   — Multi-finger (pinch variant)
+
+Why these 4 gestures:
+  These span two biomechanically distinct categories — whole-hand power gestures
+  (Close/Open) vs. individual finger isolation (Index, Index-Little). This
+  maximises inter-class separability in feature space and is the canonical
+  starting set for sEMG classifier benchmarking in the literature.
+
+Why 3 orientations:
+  Electrode-to-muscle geometry shifts with forearm rotation. Training across
+  all 3 orientations makes the classifier robust to real-world arm position
+  variation, which is critical for prosthetic and HCI applications.
+
+Subject used : Subject 1 (single-subject experiment)
+
+Recording structure:
+  4 gestures x 5 trials x 3 orientations = 60 recordings total
+  Each recording is one independent temporal sequence of 8,000 samples.
+
+
+--------------------------------------------------------------------------------
+2. WINDOWING
+--------------------------------------------------------------------------------
+
+Window size      : 200 samples  (~203 ms at 985 Hz)
+Window increment : 50 samples   (~51 ms at 985 Hz)
+Overlap          : 150 samples per adjacent pair = 75% overlap
+Windows per recording : (8000 - 200) / 50 + 1 = 157 windows
+Total windows    : 60 recordings x 157 = 9,420 windows
+
+Why window size = 200 samples (~203 ms):
+
+  Constraint 1 — Neuromuscular physiology (lower bound):
+    A single motor unit action potential (MUAP) lasts 5-15 ms. Meaningful
+    muscle activation patterns require observing several discharge cycles.
+    Below ~100 ms, time-domain features become unreliable — there are not
+    enough zero-crossings or slope sign changes to be statistically stable.
+    200 ms provides sufficient signal content for all 8 features to be
+    meaningful.
+
+  Constraint 2 — Real-time response budget (upper bound):
+    Clinical and prosthetic literature sets a hard upper bound of ~300 ms
+    for perceptible delay in limb control. At 985 Hz, 200 samples = 203 ms,
+    leaving ~97 ms for feature extraction and inference on the bare-metal MCU.
+    This keeps the system within the 300 ms real-time constraint.
+
+  Constraint 3 — Signal stationarity:
+    sEMG is assumed quasi-stationary only over short intervals (~200-500 ms).
+    Longer windows smear transient activations across gesture boundaries,
+    violating the stationarity assumption that time-domain features require.
+    200 samples sits comfortably inside this window.
+
+Why increment = 50 samples (~51 ms):
+
+  The 4:1 overlap ratio (75%) serves two purposes:
+    (a) Training data augmentation: produces 157 windows per recording instead
+        of 39 non-overlapping windows, giving the model more examples to learn
+        from without collecting additional data.
+    (b) Real-time smoothing: during inference, overlapping windows produce a
+        denser stream of predictions that can be majority-voted or smoothed,
+        reducing single-window classification errors.
+  This overlap ratio is standard in the sEMG pattern recognition literature
+  (Phinyomark et al., Khushaba et al.).
+
+IMPORTANT — Why overlap causes data leakage if splits are done wrong:
+  Adjacent windows share 150/200 = 75% of their samples. If windows are
+  randomly shuffled into train/test (as StratifiedKFold does), a test window
+  at position t will have its neighbour at t+50 in the training set. The
+  model effectively sees the test data during training via its temporal
+  neighbours. This inflated accuracy to 99.59% in v1 of this pipeline.
+  The fix is to split at the recording level, not the window level.
+
+
+--------------------------------------------------------------------------------
+3. FEATURE EXTRACTION — 8 features x 8 channels = 64-dimensional vector
+--------------------------------------------------------------------------------
+
+All features are time-domain, computed on each (200 samples, 8 channels)
+window. For each channel independently:
+
+Feature 1 — MAV (Mean Absolute Value)
+  Formula  : mean(|x|)
+  Meaning  : Proportional to muscle contraction force. The most widely used
+             single sEMG feature. Increases monotonically with motor unit
+             recruitment level.
+
+Feature 2 — RMS (Root Mean Square)
+  Formula  : sqrt(mean(x^2))
+  Meaning  : Signal power, correlated with joint torque. Slightly more
+             sensitive to large amplitude spikes than MAV.
+
+Feature 3 — VAR (Variance)
+  Formula  : var(x)  [population variance]
+  Meaning  : Amplitude spread of the signal. Clearly distinguishes rest
+             (low variance) from active gestures (high variance).
+
+Feature 4 — WL (Waveform Length)
+  Formula  : sum(|x[i+1] - x[i]|)
+  Meaning  : Cumulative arc length of the waveform. Captures both amplitude
+             and frequency information simultaneously. Higher firing rates
+             and larger MUAPs both increase WL.
+
+Feature 5 — ZC (Zero Crossings, with dead-band threshold)
+  Formula  : count of sign changes where |x[i] - x[i+1]| >= threshold
+  Threshold: 0.01 x std(window)  [suppresses noise-triggered crossings]
+  Meaning  : Proxy for mean frequency of the signal. Different gestures
+             recruit motor units at different rates, producing distinct ZC
+             counts.
+
+Feature 6 — SSC (Slope Sign Changes, with dead-band threshold)
+  Formula  : count of i where (x[i]-x[i-1])*(x[i]-x[i+1]) > 0
+             and (|x[i]-x[i-1]| >= thr  OR  |x[i]-x[i+1]| >= thr)
+  Meaning  : Mean frequency proxy, complementary to ZC. Captures local
+             oscillation rate of the waveform independently of zero-axis
+             crossings.
+
+Feature 7 — Skewness
+  Formula  : 3rd standardised central moment
+  Meaning  : Asymmetry of the amplitude distribution. Positive skewness
+             indicates rare large positive spikes; negative indicates large
+             negative spikes. Differentiates gestures with asymmetric
+             recruitment patterns.
+
+Feature 8 — Kurtosis (excess)
+  Formula  : 4th standardised central moment - 3
+  Meaning  : Impulsiveness of the signal. High kurtosis = heavy tails =
+             sparse, large-amplitude bursts (single motor unit dominance).
+             Low kurtosis = many small activations (distributed recruitment).
+             Separates single-finger from whole-hand gestures effectively.
+
+Dead-band rationale (ZC and SSC):
+  Raw sEMG contains high-frequency noise at low amplitudes. Without a
+  threshold, noise alone generates many spurious zero-crossings and slope
+  changes that wash out the gesture signal. The threshold (1% of window
+  std dev) suppresses these while preserving physiologically meaningful
+  crossings.
+
+Final feature vector layout (64 values):
+  [MAV_ch0, RMS_ch0, VAR_ch0, WL_ch0, ZC_ch0, SSC_ch0, SKEW_ch0, KURT_ch0,
+   MAV_ch1, RMS_ch1, VAR_ch1, WL_ch1, ZC_ch1, SSC_ch1, SKEW_ch1, KURT_ch1,
+   ...
+   MAV_ch7, RMS_ch7, VAR_ch7, WL_ch7, ZC_ch7, SSC_ch7, SKEW_ch7, KURT_ch7]
+
+
+--------------------------------------------------------------------------------
+4. INT8 QUANTISATION
+--------------------------------------------------------------------------------
+
+Input quantisation (before training):
+  Method   : Per-feature MinMax scaling to [-127, 127], then round and cast
+             to int8. Scaler is fit on training windows only — never on test
+             windows. This is enforced inside each CV fold.
+  Formula  : q = clip(round((x - min) / (max - min) * 254 - 127), -127, 127)
+  Purpose  : Simulates the fixed-point input pipeline on the bare-metal
+             processor. Training and evaluating on INT8 inputs gives a
+             hardware-realistic accuracy figure.
+
+Weight quantisation (after training, for ROM export):
+  Method   : Symmetric per-tensor INT8 quantisation.
+  Formula  : scale = 127 / max(|W|),  q = clip(round(W * scale), -128, 127)
+  Purpose  : Each weight stored as 1 byte in ROM. The scale factor is stored
+             separately as a fixed-point multiplier for the inference engine.
+  Output   : Verilog-compatible hex literals  e.g.  8'h3F, 8'hC2, ...
+
+Why INT8 and not float32 on hardware:
+  The target is a bare-metal processor with a 2,048 byte ROM budget. A float32
+  weight costs 4 bytes; the same value as INT8 costs 1 byte. INT8 also enables
+  integer MAC (multiply-accumulate) operations, which are 4-8x faster and
+  significantly more power-efficient than float32 on MCUs without FPUs.
+
+
+--------------------------------------------------------------------------------
+5. TRAIN / TEST SPLIT — RECORDING-LEVEL GROUPKFOLD
+--------------------------------------------------------------------------------
+
+Method    : GroupKFold(n_splits=5), groups = recording_id
+Split unit: Recording (not window)
+Guarantee : All 157 windows from a given recording appear entirely in train
+            OR entirely in test — never split across the boundary.
+
+Per fold:
+  Train : 48 recordings  = 48 x 157 = 7,536 windows
+  Test  :  12 recordings  = 12 x 157 = 1,884 windows
+  Split : 80% / 20%  at the recording level
+
+Per class per fold (balanced dataset):
+  Train : 12 recordings x 157 = 1,884 windows per gesture
+  Test  :  3 recordings x 157 =   471 windows per gesture
+
+Why GroupKFold and not StratifiedKFold:
+  StratifiedKFold shuffles individual windows. With 75% temporal overlap,
+  adjacent windows from the same recording land on both sides of the split.
+  The model sees every test window's temporal neighbours during training,
+  making the test set effectively non-independent. GroupKFold prevents this
+  by keeping each recording intact on one side of every split. This is the
+  correct evaluation protocol for any time-series classification task with
+  overlapping windows.
+
+
+--------------------------------------------------------------------------------
+6. MODEL ARCHITECTURE
+--------------------------------------------------------------------------------
+
+Selected by MAB : 64 -> 16 -> 4  (single hidden layer, 16 neurons)
+
+Layer breakdown:
+  Input layer   : 64 neurons  (one per feature)
+  Hidden layer  : 64 x 16 weights + 16 biases = 1,040 parameters
+  Activation    : ReLU
+  Output layer  : 16 x 4 weights + 4 biases  =    68 parameters
+  Total         : 1,108 parameters = 1,108 bytes INT8 ROM
+
+ROM budget compliance : 1,108 bytes < 2,048 bytes  (within budget)
+
+Parameter-to-sample ratio : 1,108 / 7,536 = 1:6.8  (healthy, no overfitting)
+
+Output layer : No Softmax. Raw logits are passed to an ArgMax loop
+               (subtract-and-branch) at inference time. This eliminates
+               the exponential computation that a bare-metal MCU cannot
+               handle efficiently.
+
+Training configuration:
+  Optimiser    : Adam (lr=0.001, weight_decay=1e-4)
+  Scheduler    : CosineAnnealingLR (T_max = 300 epochs)
+  Loss         : CrossEntropyLoss
+  Batch size   : 32
+  Epochs       : 300
+  Regulariser  : L2 weight decay (lambda=1e-4) via Adam weight_decay parameter
+
+
+--------------------------------------------------------------------------------
+7. MULTI-ARMED BANDIT — ARCHITECTURE SEARCH
+--------------------------------------------------------------------------------
+
+Algorithm : UCB1 (Upper Confidence Bound 1)
+Purpose   : Select the best MLP topology without exhaustive grid search.
+            Allocates more evaluation rounds to promising architectures.
+
+UCB1 selection formula:
+  score(arm) = mean_reward(arm) + sqrt(2 * ln(total_pulls) / pulls(arm))
+  The second term is the exploration bonus — it is large for under-tested
+  arms and shrinks as an arm is pulled more. This balances exploration
+  (trying unknown arms) with exploitation (repeating the best arm so far).
+
+Reward signal : validation accuracy / 100  (on a held-out recording-level fold)
+
+Candidate architectures searched (all within 2,048 byte budget):
+  [16]      — 1,108 bytes
+  [16, 8]   — 1,212 bytes
+  [16, 16]  — 1,380 bytes
+  [24]      — 1,660 bytes
+  [24, 8]   — 1,796 bytes
+
+Result summary:
+  All 5 arms converged to ~95.1% mean accuracy within a 0.05% band.
+  UCB1 selected [16] as winner (1,108 bytes, 95.15% mean).
+
+Why all arms gave similar accuracy:
+  The 64-dimensional feature vector is the information bottleneck, not the
+  network width. The 8 time-domain features per channel extract a fixed
+  amount of discriminative information from the signal. Adding more neurons
+  (16 vs 24) or more layers cannot recover information that was not captured
+  at the feature extraction stage. The classifier saturates at ~95% accuracy
+  because that is the ceiling imposed by the feature set for this subject
+  and these 4 gestures. The architecture is not underfitting — the feature
+  set has reached its limit.
+
+
+--------------------------------------------------------------------------------
+8. RESULTS
+--------------------------------------------------------------------------------
+
+Evaluation protocol : 5-fold GroupKFold, recording-level split, INT8 I/O
+
+Per-fold results:
+  Fold 1 : 48 train recs (7,536 windows) | 12 test recs (1,884 windows) | 95.81%
+  Fold 2 : 48 train recs (7,536 windows) | 12 test recs (1,884 windows) | 96.18%
+  Fold 3 : 48 train recs (7,536 windows) | 12 test recs (1,884 windows) | 95.33%
+  Fold 4 : 48 train recs (7,536 windows) | 12 test recs (1,884 windows) | 94.85%
+  Fold 5 : 48 train recs (7,536 windows) | 12 test recs (1,884 windows) | 92.36%
+
+Mean accuracy : 94.90% +/- 1.35%  (INT8 quantised inputs and weights)
+
+Why this result is trustworthy (vs. the earlier 99.59%):
+  - Test recordings were never seen during training
+  - No temporal neighbours of test windows appear in training set
+  - INT8 quantisation applied before evaluation, not after
+  - Accuracy reflects true generalisation to unseen recording sessions
+
+Fold 5 lower accuracy (92.36%):
+  GroupKFold assigns folds by recording index order. Fold 5 may contain
+  trials from a specific orientation or fatigue point in the session where
+  the signal characteristics differ slightly from the training distribution.
+  A 1.35% std dev across 5 folds is acceptable and expected in single-subject
+  sEMG studies.
+
+
+--------------------------------------------------------------------------------
+9. DEPLOYMENT SPECIFICATION
+--------------------------------------------------------------------------------
+
+Architecture     : 64 -> 16 -> 4  (MLP, single hidden layer)
+INT8 ROM size    : 1,108 bytes
+Budget           : 2,048 bytes  (within budget)
+Input dimension  : 64  (8 channels x 8 time-domain features)
+Output classes   : 4  (Hand Close, Hand Open, Index, Index-Little)
+Inference        : Integer MAC operations, ReLU activation, ArgMax output
+No Softmax       : Output class = argmax(logits), computed via subtract-and-branch
+Input pipeline   : float64 raw ADC -> feature extraction -> INT8 quantisation -> MLP
+Latency budget   : ~203 ms window + ~97 ms compute = within 300 ms RT constraint
+
+Weight export format:
+  Verilog-compatible two's-complement hex ROM initialisers
+  e.g.  8'h3F  (positive: direct hex)
+        8'hC2  (negative: stored as two's complement)
+
+Layer 1 : 64 x 16 = 1,024 weight bytes + 16 bias bytes = 1,040 bytes
+Layer 2 : 16 x  4 =    64 weight bytes +  4 bias bytes =    68 bytes
+Total   : 1,108 bytes
+
+================================================================================
