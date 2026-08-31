@@ -1,26 +1,39 @@
 """
 FORS-EMG TinyML Architecture Benchmark
 =======================================
-Empirically selects the optimal INT8 MLP for sEMG gesture classification
-under a 10 KB parameter-memory budget.
+Evaluates the selected INT8 MLP on the selected 4-gesture subset.
+
+Configuration decided from prior analysis
+------------------------------------------
+* Gestures: Hand Close, Hand Open, Wrist Flexion, Wrist Extension — chosen via
+  two-stage pairwise-separability search over all 12 FORS-EMG gestures, after
+  the original {Hand Close, Hand Open, Index, Index Little} set showed the
+  Index/Index Little pair alone accounted for ~40% of all classification
+  errors (fine finger movements recruiting overlapping forearm muscles,
+  poorly resolved by surface EMG).
+* Architecture: 64→16→4 (1,168 B, 1,088 MACs) — the 5-way architecture sweep
+  on the original gesture set found all candidates statistically tied
+  (rank-order unstable across 3 runs, spread 1.3 pp vs. ±5.9 pp 95% CI), so
+  architecture is fixed here rather than re-swept; edit HIDDEN_WIDTHS below to
+  re-enable the sweep on this gesture set if desired.
 
 Protocol
 --------
 * Data loading: project-native loader — iterates Subject<i>/<Orientation>/
   <gesture>-<trial>.mat, handles both (8000,8) and (8,8000) mat layouts,
   carries full metadata (subject, orientation, trial, rec_id).
-* Gestures: Hand Close, Hand Open, Index, Index Little (4 classes).
 * Features: 8 TD features × 8 channels = 64-D input vector per window.
 * Windowing: 200 ms windows, 100 ms increment (50% overlap) at 985 Hz.
   Windows are cut AFTER the LOSO split — no window ever crosses the
   train/test boundary.
 * Statistics (StandardScaler) fit on training windows ONLY.
-* Training: FP32 PyTorch MLP, Adam + CosineAnnealingLR, early stopping.
+* Preprocessing: 20-450 Hz bandpass + 50 Hz mains notch, applied once per
+  recording before windowing.
+* Training: FP32 PyTorch MLP, Adam + CosineAnnealingLR, early stopping with
+  a trial-level (not window-level) validation split.
 * Quantisation: symmetric per-tensor INT8 PTQ; biases as INT32.
   Requant multiplier M = sw·sx/sy decomposed as M0·2^-n (pure integer
   hardware arithmetic — no float at inference time).
-* Evaluated architectures (all ≤ 10 KB):
-    64→4 (linear), 64→16→4, 64→32→4, 64→64→4, 64→128→4
 
 Configuration
 -------------
@@ -50,19 +63,24 @@ np.random.seed(0)
 # ↓ Edit this to match your local path
 BASE_DIR = r"/Users/vinayhariharan/Projects/BTP/NN_model/archive/FORS-EMG Dataset/FORS-EMG Dataset/FORS-EMG"
 
-# Gesture class index → file prefix  (your exact mapping)
+# Gesture class index → file prefix
+# Updated from the original {Hand_Close, Hand_Open, Index, Index_Little} set
+# based on the two-stage pairwise-separability search: Index vs Index_Little
+# was the dominant confusion (~40% of all errors), while wrist flexion/
+# extension recruit distinct superficial muscle compartments and should be
+# far more separable on 8-channel surface EMG.
 CLASSES = [0, 1, 2, 3]
 GESTURE_FILE_MAP = {
     0: "Hand_Close",
     1: "Hand_Open",
-    2: "Index",
-    3: "Index_Little",
+    2: "Wrist_Flexion",
+    3: "Wrist_Extension",
 }
 GESTURE_NAMES = {
     0: "Hand Close",
     1: "Hand Open",
-    2: "Index",
-    3: "Index Little",
+    2: "Wrist Flexion",
+    3: "Wrist Extension",
 }
 FOREARM_ORIENTATIONS = ["Rest", "Supination", "Pronation"]
 N_TRIALS = 5
@@ -81,9 +99,17 @@ INPUT_DIM   = N_CHANNELS * N_FEATURES # 64
 INT8_MAX  = 127
 INT8_MIN  = -128
 CALIB_PCT = 99.9   # percentile for robust scale computation
+REQUANT_SHIFT = 31 # fixed-point precision of the requantisation multiplier
 
 # ─── Architecture search space ────────────────────────────────────────────────
-HIDDEN_WIDTHS = [None, 16, 32, 64, 128]   # None = linear 64→4
+# Fixed to the single selected architecture. The prior 5-way sweep showed all
+# candidates were statistically indistinguishable (spread 1.3 pp vs. ±5.9 pp
+# 95% CI, unstable rank order across runs, ~13% power to detect 1 pp) — the
+# accuracy ceiling was set by gesture separability, not model capacity. 64→16→4
+# is the defensible pick: smallest model retaining nonlinear capacity, tied
+# with every larger candidate. Re-add widths here if you want the full sweep
+# on this new gesture set instead of just this one architecture.
+HIDDEN_WIDTHS = [16]
 
 # ─── Preprocessing filter configuration ───────────────────────────────────────
 # Standard sEMG conditioning: removes DC offset / motion artifact below the
@@ -371,12 +397,15 @@ def ptq_and_infer(model_fp32, X_calib, X_test):
             sy = compute_scale(np.maximum(0, z))
             x_fp = np.maximum(0, z)
 
+        # Requantisation multiplier M = sw*sx/sy, expressed as (M0, shift) so
+        # that y = (z*M0) >> shift reproduces round(M*z) with integer ops only.
+        # A FIXED non-negative shift is used deliberately: deriving the shift
+        # from ceil(-log2(M)) breaks whenever M > 1, because the shift goes
+        # negative and a negative right-shift is undefined. A fixed shift is
+        # valid for any M > 0 and is what hardware would hard-wire anyway.
         M = (sw * sx) / sy
-        if M > 0:
-            n_shift = int(np.ceil(-np.log2(M)))
-            M0 = int(np.round(M * (2**n_shift) * (2**15)))
-        else:
-            n_shift, M0 = 0, 0
+        n_shift = REQUANT_SHIFT
+        M0 = int(np.round(M * (1 << REQUANT_SHIFT))) if M > 0 else 0
 
         W_q  = quantize_to_int8(W, sw).astype(np.int32)
         b_q  = np.round(b / (sw * sx)).astype(np.int32)
@@ -388,12 +417,15 @@ def ptq_and_infer(model_fp32, X_calib, X_test):
                   INT8_MIN, INT8_MAX).astype(np.int32)
 
     for W_q, b_q, sy, M0, n_shift, is_last in layer_info:
-        z = x_q @ W_q.T + b_q[None, :]
+        z = (x_q.astype(np.int64) @ W_q.T.astype(np.int64)
+             + b_q[None, :].astype(np.int64))
         if is_last:
+            # argmax on the raw accumulator — requantisation is a monotone
+            # positive scaling and cannot change which logit is largest.
             return np.argmax(z, axis=1)
-        # Requantize + ReLU
-        z_req = np.right_shift(z * M0, 15 + n_shift)
-        x_q   = np.maximum(0, np.clip(z_req, INT8_MIN, INT8_MAX))
+        # Requantise (round-to-nearest, int64) + ReLU
+        z_req = ((z * np.int64(M0)) + (np.int64(1) << (n_shift - 1))) >> n_shift
+        x_q   = np.maximum(0, np.clip(z_req, INT8_MIN, INT8_MAX)).astype(np.int32)
 
     return np.argmax(z, axis=1)   # fallback (linear model)
 
