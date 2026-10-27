@@ -1,0 +1,9 @@
+waveform/
+*.vcd
+*.fst
+*.ghw
+sim_build/
+__pycache__/
+*.pyc
+results.xml
+.DS_Store
