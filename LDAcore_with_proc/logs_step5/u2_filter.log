@@ -1,0 +1,19 @@
+     -.--ns INFO     gpi                                ../gpi/GpiCommon.cpp:242  in gpi_load_users                  Loaded entry library: '/usr/lib/x86_64-linux-gnu/libpython3.12.so.1.0'
+     -.--ns INFO     gpi                                ../gpi/GpiCommon.cpp:233  in gpi_load_users                  Running entry func 'initialize' from loaded library '/home/sudhindra/emg-venv/lib/python3.12/site-packages/cocotb/simulator.cpython-312-x86_64-linux-gnu.so'
+     -.--ns INFO     pygpi                              ..ib/pygpi/embed.cpp:114  in initialize                      Using Python 3.12.12 interpreter at /home/sudhindra/emg-venv/bin/python
+     -.--ns INFO     gpi                                ../gpi/GpiCommon.cpp:74   in gpi_print_registered_impl       GPI: VPI support registered
+     0.00ns INFO     cocotb.initialize                  Seeding Python random module with 1793487906
+     0.00ns INFO     cocotb.initialize                  Initialized cocotb v2.1.0 from /home/sudhindra/emg-venv/lib/python3.12/site-packages/cocotb
+     0.00ns INFO     cocotb.initialize                  Running on Icarus Verilog version 12.0 (stable)
+     0.00ns INFO     cocotb.regression                  Running tests
+     0.00ns INFO     cocotb.regression                  running test_filter.filt (1/1)
+94871000.00ns INFO     cocotb.emg_filter                  largest stored output per section [1192925, 1508042, 1034160, 1582091, 2109021] (bounds [1226689, 1804343, 1275209, 1639416, 2109612]; widths 22, 22, 22, 22, 23 bits)
+94871000.00ns INFO     cocotb.emg_filter                  4656 channel-samples match the golden model (8-bit output, input history and both stored outputs of all 5 sections), 985 clipped at -128 / 127, every shift 0..8, first-sample start, re-arm; longest run 481 cycles
+94871000.00ns INFO     cocotb.regression                  test_filter.filt passed
+94871000.00ns INFO     cocotb.regression                  **************************************************************************************
+                                                        ** TEST                          STATUS  SIM TIME (ns)  REAL TIME (s)  RATIO (ns/s) **
+                                                        **************************************************************************************
+                                                        ** test_filter.filt               PASS    94871000.00           6.55   14482275.01  **
+                                                        **************************************************************************************
+                                                        ** TESTS=1 PASS=1 FAIL=0 SKIP=0           94871000.00           6.55   14476725.71  **
+                                                        **************************************************************************************

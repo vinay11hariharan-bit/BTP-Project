@@ -1,0 +1,33 @@
+     -.--ns INFO     gpi                                ../gpi/GpiCommon.cpp:242  in gpi_load_users                  Loaded entry library: '/usr/lib/x86_64-linux-gnu/libpython3.12.so.1.0'
+     -.--ns INFO     gpi                                ../gpi/GpiCommon.cpp:233  in gpi_load_users                  Running entry func 'initialize' from loaded library '/home/sudhindra/emg-venv/lib/python3.12/site-packages/cocotb/simulator.cpython-312-x86_64-linux-gnu.so'
+     -.--ns INFO     pygpi                              ..ib/pygpi/embed.cpp:114  in initialize                      Using Python 3.12.12 interpreter at /home/sudhindra/emg-venv/bin/python
+     -.--ns INFO     gpi                                ../gpi/GpiCommon.cpp:74   in gpi_print_registered_impl       GPI: VPI support registered
+     0.00ns INFO     cocotb.initialize                  Seeding Python random module with 1793489339
+     0.00ns INFO     cocotb.initialize                  Initialized cocotb v2.1.0 from /home/sudhindra/emg-venv/lib/python3.12/site-packages/cocotb
+     0.00ns INFO     cocotb.initialize                  Running on Icarus Verilog version 12.0 (stable)
+     0.00ns INFO     cocotb.regression                  Running tests
+     0.00ns INFO     cocotb.regression                  running test_emg_top.chip (1/3)
+282855375.00ns INFO     cocotb.emg_top                     C=8 B=50 N=3 W=2: 252 ADC frames, 5 read-outs; all settings read back correctly over SPI; every frame (46 bytes) matches the golden model byte for byte, warm-up ones flagged not valid; Stage 2 = 42 clk_sys cycles (sample period 1000)
+282855375.00ns INFO     cocotb.emg_top                     C=8 B=50 N=3 W=2: T_REST = 16985, rest sums [5173, 10081, 16985, 18633, 19057] (0x7FB matches), rest flags [1, 1, 0, 0, 0]; frozen channel 7 dead flags [0, 0, 0, 1, 1]
+282855375.00ns INFO     cocotb.emg_top                     C=8 B=50 N=3 W=2: ADS1299 frames, shift 11, 0 codes beyond the INT8 range saturated correctly
+282855375.00ns INFO     cocotb.regression                  test_emg_top.chip passed
+282855375.00ns INFO     cocotb.regression                  running test_emg_top.settings (2/3)
+                                                            Range checks over SPI, a wrong command, an unused address.
+304579375.00ns INFO     cocotb.emg_top                     settings: B = 0 / 101 and N = 0 / 5 set the settings-error flag and stop / refuse the core; valid values clear it; reset values 98, 2, 1 and 0, 0, 0 (T_REST, dead rule, rest sum), 0 (filter on) and the designed coefficients (0x7C0-0x7D0); T_REST keeps 21 bits, the dead rule 1 bit; the rest sum is read only; a wrong command and a cut-short write do nothing; unused addresses read 0
+304579375.00ns INFO     cocotb.regression                  test_emg_top.settings passed
+304579375.00ns INFO     cocotb.regression                  running test_emg_top.link (3/3)
+                                                            Skip rule (slow read) and mixed-frame guard (read during Stage 2).
+624034375.00ns INFO     cocotb.emg_top                     C=8 B=50 N=3 W=2: slow read (199 us per bit, 46 bytes over 1.5 read-outs) got frame 1 intact; read-out 2 was skipped and frame 3 carried the skipped flag; a read started during Stage 2 got an inverted checksum; frame 5 after it was clean
+624034375.00ns INFO     cocotb.regression                  test_emg_top.link passed
+624034375.00ns INFO     cocotb.regression                  **************************************************************************************
+                                                        ** TEST                          STATUS  SIM TIME (ns)  REAL TIME (s)  RATIO (ns/s) **
+                                                        **************************************************************************************
+                                                        ** test_emg_top.chip              PASS   282855375.00         118.52    2386591.85  **
+                                                        ** test_emg_top.settings          PASS    21724000.00           8.24    2637681.83  **
+                                                        ** test_emg_top.link              PASS   319455000.00         126.30    2529405.30  **
+                                                        **************************************************************************************
+                                                        ** TESTS=3 PASS=3 FAIL=0 SKIP=0          624034375.00         253.06    2465980.15  **
+                                                        **************************************************************************************
+VCD info: dumpfile /mnt/c/Users/Hp/OneDrive/Documents/BTP-Project-main/RTL/waveform/emg_top_all.vcd opened for output.
+RTL: cdc_toggle_sync.v, emg_cfg_regs.v, emg_core_ctrl.v, emg_feat_accum.v, emg_feat_alu.v, emg_filter.v, emg_lda_mac.v, emg_mitchell_sq.v, emg_shift_norm.v, emg_spi_adc.v, emg_spi_slave.v, emg_top.v, emg_tp_ram.v, rst_sync.v
+VCD: /mnt/c/Users/Hp/OneDrive/Documents/BTP-Project-main/RTL/waveform/emg_top_all.vcd

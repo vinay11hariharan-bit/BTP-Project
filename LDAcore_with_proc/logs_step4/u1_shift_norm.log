@@ -1,0 +1,18 @@
+     -.--ns INFO     gpi                                ../gpi/GpiCommon.cpp:242  in gpi_load_users                  Loaded entry library: '/usr/lib/x86_64-linux-gnu/libpython3.12.so.1.0'
+     -.--ns INFO     gpi                                ../gpi/GpiCommon.cpp:233  in gpi_load_users                  Running entry func 'initialize' from loaded library '/home/sudhindra/emg-venv/lib/python3.12/site-packages/cocotb/simulator.cpython-312-x86_64-linux-gnu.so'
+     -.--ns INFO     pygpi                              ..ib/pygpi/embed.cpp:114  in initialize                      Using Python 3.12.12 interpreter at /home/sudhindra/emg-venv/bin/python
+     -.--ns INFO     gpi                                ../gpi/GpiCommon.cpp:74   in gpi_print_registered_impl       GPI: VPI support registered
+     0.00ns INFO     cocotb.initialize                  Seeding Python random module with 1793483680
+     0.00ns INFO     cocotb.initialize                  Initialized cocotb v2.1.0 from /home/sudhindra/emg-venv/lib/python3.12/site-packages/cocotb
+     0.00ns INFO     cocotb.initialize                  Running on Icarus Verilog version 12.0 (stable)
+     0.00ns INFO     cocotb.regression                  Running tests
+     0.00ns INFO     cocotb.regression                  running test_shift_norm.requant (1/1)
+19436000.00ns INFO     cocotb.emg_shift_norm              300 trials, 18835 features match requant(): 10959 with k <= 0 (stretch), 9621 clipped at -128 / 127, every k from -32 to 31, mu' over all 24 bits; dead mask and rest sum match in every trial
+19436000.00ns INFO     cocotb.regression                  test_shift_norm.requant passed
+19436000.00ns INFO     cocotb.regression                  **************************************************************************************
+                                                        ** TEST                          STATUS  SIM TIME (ns)  REAL TIME (s)  RATIO (ns/s) **
+                                                        **************************************************************************************
+                                                        ** test_shift_norm.requant        PASS    19436000.00           3.01    6463296.58  **
+                                                        **************************************************************************************
+                                                        ** TESTS=1 PASS=1 FAIL=0 SKIP=0           19436000.00           3.01    6457505.20  **
+                                                        **************************************************************************************

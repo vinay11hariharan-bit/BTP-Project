@@ -1,0 +1,24 @@
+     -.--ns INFO     gpi                                ../gpi/GpiCommon.cpp:242  in gpi_load_users                  Loaded entry library: '/usr/lib/x86_64-linux-gnu/libpython3.12.so.1.0'
+     -.--ns INFO     gpi                                ../gpi/GpiCommon.cpp:233  in gpi_load_users                  Running entry func 'initialize' from loaded library '/home/sudhindra/emg-venv/lib/python3.12/site-packages/cocotb/simulator.cpython-312-x86_64-linux-gnu.so'
+     -.--ns INFO     pygpi                              ..ib/pygpi/embed.cpp:114  in initialize                      Using Python 3.12.12 interpreter at /home/sudhindra/emg-venv/bin/python
+     -.--ns INFO     gpi                                ../gpi/GpiCommon.cpp:74   in gpi_print_registered_impl       GPI: VPI support registered
+     0.00ns INFO     cocotb.initialize                  Seeding Python random module with 1793486325
+     0.00ns INFO     cocotb.initialize                  Initialized cocotb v2.1.0 from /home/sudhindra/emg-venv/lib/python3.12/site-packages/cocotb
+     0.00ns INFO     cocotb.initialize                  Running on Icarus Verilog version 12.0 (stable)
+     0.00ns INFO     cocotb.regression                  Running tests
+     0.00ns INFO     cocotb.regression                  running test_emg_chain.chain (1/1)
+282589375.00ns WARNING  cocotb.regression                  test_emg_chain.chain failed
+                                                        Traceback (most recent call last):
+                                                          File "/mnt/c/Users/Hp/OneDrive/Documents/BTP-Project-main/RTL/tb/test_emg_chain.py", line 429, in chain
+                                                            assert not bad_miso, (f"{tag}: SPI TIMING, the chip sampled MISO = {bad_miso[0][1]} at {bad_miso[0][0]:.0f} ns "
+                                                        AssertionError: 1 device(s) x 8 electrodes, C=8: SPI TIMING, the chip sampled MISO = X at 30094625 ns (54648 bad samples): the device's bit was not valid yet
+                                                        assert not [(30094625.0, 'X'), (30094875.0, 'X'), (30095125.0, 'X'), (30095375.0, 'X'), (30095625.0, 'X'), (30095875.0, 'X'), ...]
+282589375.00ns INFO     cocotb.regression                  **************************************************************************************
+                                                        ** TEST                          STATUS  SIM TIME (ns)  REAL TIME (s)  RATIO (ns/s) **
+                                                        **************************************************************************************
+                                                        ** test_emg_chain.chain           FAIL   282589375.00          74.94    3770990.23  **
+                                                        **************************************************************************************
+                                                        ** TESTS=1 PASS=0 FAIL=1 SKIP=0          282589375.00          74.95    3770472.43  **
+                                                        **************************************************************************************
+RTL: cdc_toggle_sync.v, emg_cfg_regs.v, emg_core_ctrl.v, emg_feat_accum.v, emg_feat_alu.v, emg_lda_mac.v, emg_mitchell_sq.v, emg_shift_norm.v, emg_spi_adc.v, emg_spi_slave.v, emg_top.v, emg_tp_ram.v, rst_sync.v, ads1299_model.v, tb_chain.v
+Chain: 1 ADS1299 device(s) x 8 electrodes = 8 electrodes, chip reads C = 8

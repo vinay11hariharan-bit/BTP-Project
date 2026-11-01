@@ -1,0 +1,27 @@
+     -.--ns INFO     gpi                                ../gpi/GpiCommon.cpp:242  in gpi_load_users                  Loaded entry library: '/usr/lib/x86_64-linux-gnu/libpython3.12.so.1.0'
+     -.--ns INFO     gpi                                ../gpi/GpiCommon.cpp:233  in gpi_load_users                  Running entry func 'initialize' from loaded library '/home/sudhindra/emg-venv/lib/python3.12/site-packages/cocotb/simulator.cpython-312-x86_64-linux-gnu.so'
+     -.--ns INFO     pygpi                              ..ib/pygpi/embed.cpp:114  in initialize                      Using Python 3.12.12 interpreter at /home/sudhindra/emg-venv/bin/python
+     -.--ns INFO     gpi                                ../gpi/GpiCommon.cpp:74   in gpi_print_registered_impl       GPI: VPI support registered
+     0.00ns INFO     cocotb.initialize                  Seeding Python random module with 1793473498
+     0.00ns INFO     cocotb.initialize                  Initialized cocotb v2.1.0 from /home/sudhindra/emg-venv/lib/python3.12/site-packages/cocotb
+     0.00ns INFO     cocotb.initialize                  Running on Icarus Verilog version 12.0 (stable)
+     0.00ns INFO     cocotb.regression                  Running tests
+     0.00ns INFO     cocotb.regression                  running test_emg_top.chip (1/2)
+604990375.00ns INFO     cocotb.emg_top                     C=24 B=100 N=4 W=3: 602 ADC frames, 6 read-outs; x_q and scores match the golden model for all of them, class_out for 3..5; 3 warm-up decision(s) masked; Stage 2+3 = 850 clk_sys cycles (sample period 1000)
+604990375.00ns INFO     cocotb.emg_top                     C=24 B=100 N=4 W=3: decisions [1, 2, 3]; ADS1299 frames, shift 11, 1 codes beyond the INT8 range saturated correctly
+604990375.00ns INFO     cocotb.regression                  test_emg_top.chip passed
+604990375.00ns INFO     cocotb.regression                  running test_emg_top.settings (2/2)
+                                                            Bank size B outside 1..100 or bank count N outside 1..4: cfg_err = 1, core_en refused.
+605039875.00ns INFO     cocotb.emg_top                     settings: B = 0 or 101 and N = 0 or 5 set cfg_err and stop / refuse the core; valid values clear it; reset values 98, 2, 1
+605039875.00ns INFO     cocotb.regression                  test_emg_top.settings passed
+605039875.00ns INFO     cocotb.regression                  **************************************************************************************
+                                                        ** TEST                          STATUS  SIM TIME (ns)  REAL TIME (s)  RATIO (ns/s) **
+                                                        **************************************************************************************
+                                                        ** test_emg_top.chip              PASS   604990375.00         291.09    2078372.31  **
+                                                        ** test_emg_top.settings          PASS       49500.00           0.02    2143027.19  **
+                                                        **************************************************************************************
+                                                        ** TESTS=2 PASS=2 FAIL=0 SKIP=0          605039875.00         291.12    2078341.46  **
+                                                        **************************************************************************************
+VCD info: dumpfile /mnt/c/Users/Hp/OneDrive/Documents/BTP-Project-main/RTL/waveform/emg_top_all.vcd opened for output.
+RTL: cdc_toggle_sync.v, emg_cfg_regs.v, emg_core_ctrl.v, emg_feat_accum.v, emg_feat_alu.v, emg_lda_mac.v, emg_mitchell_sq.v, emg_shift_norm.v, emg_spi_adc.v, emg_top.v, emg_tp_ram.v, rst_sync.v
+VCD: /mnt/c/Users/Hp/OneDrive/Documents/BTP-Project-main/RTL/waveform/emg_top_all.vcd

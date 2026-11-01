@@ -1,0 +1,28 @@
+     -.--ns INFO     gpi                                ../gpi/GpiCommon.cpp:242  in gpi_load_users                  Loaded entry library: '/usr/lib/x86_64-linux-gnu/libpython3.12.so.1.0'
+     -.--ns INFO     gpi                                ../gpi/GpiCommon.cpp:233  in gpi_load_users                  Running entry func 'initialize' from loaded library '/home/sudhindra/emg-venv/lib/python3.12/site-packages/cocotb/simulator.cpython-312-x86_64-linux-gnu.so'
+     -.--ns INFO     pygpi                              ..ib/pygpi/embed.cpp:114  in initialize                      Using Python 3.12.12 interpreter at /home/sudhindra/emg-venv/bin/python
+     -.--ns INFO     gpi                                ../gpi/GpiCommon.cpp:74   in gpi_print_registered_impl       GPI: VPI support registered
+     0.00ns INFO     cocotb.initialize                  Seeding Python random module with 1793474833
+     0.00ns INFO     cocotb.initialize                  Initialized cocotb v2.1.0 from /home/sudhindra/emg-venv/lib/python3.12/site-packages/cocotb
+     0.00ns INFO     cocotb.initialize                  Running on Icarus Verilog version 12.0 (stable)
+     0.00ns INFO     cocotb.regression                  Running tests
+     0.00ns INFO     cocotb.regression                  running test_emg_chain.chain (1/1)
+695500.00ns WARNING  cocotb.regression                  test_emg_chain.chain failed
+                                                        Traceback (most recent call last):
+                                                          File "/mnt/c/Users/Hp/OneDrive/Documents/BTP-Project-main/RTL/tb/test_emg_chain.py", line 360, in chain
+                                                            check_devices(dut, pods, tag)
+                                                          File "/mnt/c/Users/Hp/OneDrive/Documents/BTP-Project-main/RTL/tb/test_emg_chain.py", line 241, in check_devices
+                                                            assert not any(viol), f"{tag}: ADS1299 RULES broken, violations per device {viol} (see the messages above)"
+                                                        AssertionError: 1 device(s) x 8 electrodes, C=8: ADS1299 RULES broken, violations per device [1] (see the messages above)
+                                                        assert not True
+                                                         +  where True = any([1])
+695500.00ns INFO     cocotb.regression                  **************************************************************************************
+                                                        ** TEST                          STATUS  SIM TIME (ns)  REAL TIME (s)  RATIO (ns/s) **
+                                                        **************************************************************************************
+                                                        ** test_emg_chain.chain           FAIL      695500.00           0.31    2242580.10  **
+                                                        **************************************************************************************
+                                                        ** TESTS=1 PASS=0 FAIL=1 SKIP=0             695500.00           0.32    2159693.17  **
+                                                        **************************************************************************************
+695.375 us  ADS1299 tb.pod[0].u_pod.bad: START while not in RDATAC single-shot mode
+RTL: cdc_toggle_sync.v, emg_cfg_regs.v, emg_core_ctrl.v, emg_feat_accum.v, emg_feat_alu.v, emg_lda_mac.v, emg_mitchell_sq.v, emg_shift_norm.v, emg_spi_adc.v, emg_top.v, emg_tp_ram.v, rst_sync.v, ads1299_model.v, tb_chain.v
+Chain: 1 ADS1299 device(s) x 8 electrodes = 8 electrodes, chip reads C = 8

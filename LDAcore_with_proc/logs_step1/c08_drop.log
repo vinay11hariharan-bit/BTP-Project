@@ -1,0 +1,23 @@
+     -.--ns INFO     gpi                                ../gpi/GpiCommon.cpp:242  in gpi_load_users                  Loaded entry library: '/usr/lib/x86_64-linux-gnu/libpython3.12.so.1.0'
+     -.--ns INFO     gpi                                ../gpi/GpiCommon.cpp:233  in gpi_load_users                  Running entry func 'initialize' from loaded library '/home/sudhindra/emg-venv/lib/python3.12/site-packages/cocotb/simulator.cpython-312-x86_64-linux-gnu.so'
+     -.--ns INFO     pygpi                              ..ib/pygpi/embed.cpp:114  in initialize                      Using Python 3.12.12 interpreter at /home/sudhindra/emg-venv/bin/python
+     -.--ns INFO     gpi                                ../gpi/GpiCommon.cpp:74   in gpi_print_registered_impl       GPI: VPI support registered
+     0.00ns INFO     cocotb.initialize                  Seeding Python random module with 1793474547
+     0.00ns INFO     cocotb.initialize                  Initialized cocotb v2.1.0 from /home/sudhindra/emg-venv/lib/python3.12/site-packages/cocotb
+     0.00ns INFO     cocotb.initialize                  Running on Icarus Verilog version 12.0 (stable)
+     0.00ns INFO     cocotb.regression                  Running tests
+     0.00ns INFO     cocotb.regression                  running test_emg_chain.chain (1/1)
+     0.00ns INFO     cocotb.tb                          1 device(s) x 8 electrodes, C=8: missing [], stuck [], quiet [], lead-off [], lost sample 130, chip told 8 channels per device (acts as 8), shift 11 (acts as 11)
+252870375.00ns INFO     cocotb.tb                          1 device(s) x 8 electrodes, C=8: 251 frames through the ADS1299 chain, devices configured by the chip, no datasheet rule broken, every MISO sample valid, every frame parsed right (0 saturated codes); x_q, scores and dead_mask match for all 5 read-outs, chan_fault, link_err and class_out for 2..4 (B=50 N=3 W=2)
+252870375.00ns INFO     cocotb.tb                          1 device(s) x 8 electrodes, C=8: decisions [1, 2, 2], chan_fault ['0', '0', '0'], link_err ['1', '0', '0'], dead channels per read-out [[], [], [], [], []], link_err rose 1003 us after the lost sample's START
+252870375.00ns INFO     cocotb.tb                          1 device(s) x 8 electrodes, C=8: decisions with every electrode healthy would have been [1, 2, 2]
+252870375.00ns INFO     cocotb.regression                  test_emg_chain.chain passed
+252870375.00ns INFO     cocotb.regression                  **************************************************************************************
+                                                        ** TEST                          STATUS  SIM TIME (ns)  REAL TIME (s)  RATIO (ns/s) **
+                                                        **************************************************************************************
+                                                        ** test_emg_chain.chain           PASS   252870375.00          77.75    3252556.67  **
+                                                        **************************************************************************************
+                                                        ** TESTS=1 PASS=1 FAIL=0 SKIP=0          252870375.00          77.75    3252445.52  **
+                                                        **************************************************************************************
+RTL: cdc_toggle_sync.v, emg_cfg_regs.v, emg_core_ctrl.v, emg_feat_accum.v, emg_feat_alu.v, emg_lda_mac.v, emg_mitchell_sq.v, emg_shift_norm.v, emg_spi_adc.v, emg_top.v, emg_tp_ram.v, rst_sync.v, ads1299_model.v, tb_chain.v
+Chain: 1 ADS1299 device(s) x 8 electrodes = 8 electrodes, chip reads C = 8
