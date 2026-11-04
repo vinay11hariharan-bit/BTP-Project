@@ -58,28 +58,3 @@ ax.legend(frameon=False, loc="upper left", fontsize=6.5)
 save(fig, "cycles")
 print("figures in", OUT)
 
-# 4. Calibration
-fig, ax = plt.subplots(figsize=(3.4, 1.9))
-names = ["LDA (refit)", "HDC Way 1", "HDC Way 2", "Tsetlin"]
-before = [78.2, 60.0, 66.7, 72.1]
-after = [78.9, 71.2, 77.9, 80.7]
-x = range(len(names))
-ax.bar([i - 0.18 for i in x], before, 0.36, color=MUTE, label="no calibration")
-ax.bar([i + 0.18 for i in x], after, 0.36, color=ACC, label="1-trial calibration")
-for i, a in enumerate(after):
-    ax.text(i + 0.18, a + 1, f"{a:.1f}", ha="center", fontsize=6.5)
-ax.set_xticks(list(x)); ax.set_xticklabels(names); ax.set_ylim(50, 88)
-ax.set_ylabel("Accuracy (%)"); ax.legend(frameon=False, fontsize=6.5, loc="upper left")
-save(fig, "calibration")
-
-# 5. Stopping rules: error vs latency (delta = 0.05, all pairs pooled)
-fig, ax = plt.subplots(figsize=(3.4, 2.0))
-rules = [("1 window", 0.20, 6.60, MUTE), ("vote of 3", 0.60, 6.27, MUTE), ("vote of 5", 1.00, 5.86, MUTE),
-         ("mixture $W_t$", 1.75, 2.05, ACC), ("GLR, $\\rho$ unknown", 3.24, 0.90, INK),
-         ("GLR, $\\rho=0$", 2.10, 0.28, INK), ("GLR, $\\rho$ train", 2.45, 0.76, INK)]
-for name, lat, err, c in rules:
-    ax.scatter(lat, err, color=c, s=18, zorder=3)
-    ax.annotate(name, (lat, err), xytext=(4, 2), textcoords="offset points", fontsize=6.5)
-ax.set_xlabel("Mean decision latency (s)"); ax.set_ylabel("Error when decided (%)")
-ax.set_xlim(0, 4.2); ax.set_ylim(0, 7.5)
-save(fig, "stopping")

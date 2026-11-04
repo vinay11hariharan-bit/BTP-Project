@@ -23,8 +23,7 @@ All accuracies are leave-one-subject-out (LOSO) on FORS-EMG, 4 gestures
 | RTL vs golden model, whole chip, C = 8 … 24 channels | bit-exact (x_q, scores, class) |
 | Worst-case Stage 2 + 3 time (C = 24) | 850 of 1015 cycles per sample at 1 MHz |
 
-Details: [`docs/technical_summary.md`](docs/technical_summary.md) (model search), [`RTL/README.md`](RTL/README.md) (hardware),
-and the explorations section below.
+Details: [`docs/technical_summary.md`](docs/technical_summary.md) (model search) and [`RTL/README.md`](RTL/README.md) (hardware).
 
 ## Repository map
 
@@ -44,11 +43,6 @@ and the explorations section below.
 ├── golden_model/
 │   ├── lda_golden_model.py          bit-exact Python model of the chip (Stages 1-3); training + test vectors
 │   └── K_4_LDA_Golden_LOSO.py       chip model vs software LDA on FORS-EMG (paired LOSO)
-├── explorations/                    alternatives evaluated in Nov 2026
-│   ├── K_4_HDC_Way1_vs_Way2.py      hyperdimensional computing on features vs on samples
-│   ├── K_4_HDC_Calib.py             HDC with per-user calibration
-│   ├── K_4_TM_Calib.py              Tsetlin machine with per-user calibration
-│   └── K_2_CTBAI_Stopping.py        correlated best-arm-identification stopping rules
 ├── RTL/                             Verilog of the chip + chip-level cocotb testbench (RTL/README.md)
 ├── docs/
 │   ├── technical_summary.md         model search: preprocessing, INT8 scheme, results
@@ -64,10 +58,8 @@ pip install torch                                          # MLP and CNN scripts
 brew install icarus-verilog && pip install cocotb          # RTL simulation (macOS; apt install iverilog on Linux)
 ```
 
-Run every script from the repository root, for example `python analysis/K_4_LDA_Analysis.py` or
-`python explorations/K_4_TM_Calib.py`. The dataset is found automatically in `archive/`; to use another
-copy, set `BASE_DIR` at the top of `analysis/K_4_LDA_Analysis.py`. The scripts in `golden_model/` and
-`explorations/` import their data loading from `analysis/K_4_LDA_Analysis.py`, so every script sees the
+Run every script from the repository root, for example `python analysis/K_4_LDA_Analysis.py`. The dataset is found automatically in `archive/`; to use another
+copy, set `BASE_DIR` at the top of `analysis/K_4_LDA_Analysis.py`. The scripts in `golden_model/` import their data loading from `analysis/K_4_LDA_Analysis.py`, so every script sees the
 same filter, windows and folds. Scripts print their results; the older analysis scripts also save a results CSV in the working directory.
 
 ## Evaluation protocol (shared by every script)
@@ -102,18 +94,5 @@ same filter, windows and folds. Scripts print their results; the older analysis 
 - `processor_flexibility` — the chip as a configurable feature front end for a microcontroller:
   on-chip LDA removed, real TI ADS1299 ADC interface, SPI slave link to an MCU, on-chip IIR filter,
   configurable windows, fault flags. See `LDAcore_with_proc/README.md` on that branch.
-
-## Explorations (Nov 2026)
-
-Alternative classifiers and decision rules, each evaluated with the same LOSO protocol on the chip's
-own INT8 features. Calibration = one trial of the new user (every gesture once); the test uses that
-user's other trials only.
-
-| Script | Idea | Result |
-|---|---|---|
-| `explorations/K_4_HDC_Way1_vs_Way2.py` | Hyperdimensional computing, no multipliers. Way 1 encodes the 40 features, Way 2 encodes per-sample envelopes with 3-step sequences | Way 1 60.2 %, Way 2 67.0 %, LDA 77.4 % (18 subjects) |
-| `explorations/K_4_HDC_Calib.py` | HDC prototypes updated on chip with the calibration trial (additions only) | Way 2: 66.7 → 77.9 %, matches the LDA (78.9 % with calibration) |
-| `explorations/K_4_TM_Calib.py` | Tsetlin machine (logic-only clauses, learning automata) with calibration | 71.9 → 80.2 ± 2.8 % (18 subjects); worst user 71 % vs 61 % for LDA; memory too large for this chip |
-| `explorations/K_2_CTBAI_Stopping.py` | Binary decisions as two-armed correlated Gaussian best-arm identification (cost-weighted, joint pulls); decide when confident | error per decision 6.6 % → 0.2–1.1 % on 5 of 6 gesture pairs in about 1.8 s with the mixture-martingale rule |
 
 The full project report is in [`docs/report/`](docs/report/).
