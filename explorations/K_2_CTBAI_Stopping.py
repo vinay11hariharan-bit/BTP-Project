@@ -39,8 +39,7 @@ Data: x_q from the bit-exact Stage 1 + 2 model, LOSO as in the other scripts (no
 LDA fitted on the training subjects only), every recording of the held-out subject is one
 decision, for all 6 gesture pairs. Prints results only; writes no files.
 
-Run:  python K_2_CTBAI_Stopping.py
-      (K_4_HDC_Way1_vs_Way2.py, K_4_LDA_Analysis.py and lda_golden_model.py in the same folder)
+Run:  python explorations/K_2_CTBAI_Stopping.py      (from the repository root; imports from analysis/ and golden_model/)
 """
 
 import itertools
@@ -49,6 +48,11 @@ import numpy as np
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from tabulate import tabulate
 from tqdm import tqdm
+
+import sys
+from pathlib import Path
+_ROOT = Path(__file__).resolve().parents[1]
+sys.path[:0] = [str(_ROOT / "analysis"), str(_ROOT / "golden_model"), str(_ROOT / "explorations")]
 
 import K_4_HDC_Way1_vs_Way2 as H          # data loading
 import K_4_LDA_Analysis as B

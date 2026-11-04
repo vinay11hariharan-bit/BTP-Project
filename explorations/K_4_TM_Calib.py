@@ -31,15 +31,18 @@ Calibration = CALIB_EPOCHS more epochs of the same TM rules on the calibration w
 The INT8 LDA (without and with the calibration trial, refitted offline) is the reference.
 Prints results only; writes no files.
 
-Run:  python K_4_TM_Calib.py
-      (K_4_HDC_Way1_vs_Way2.py, K_4_LDA_Analysis.py and lda_golden_model.py in the same folder;
-       it reuses the data loading of K_4_HDC_Way1_vs_Way2.py)
+Run:  python explorations/K_4_TM_Calib.py      (from the repository root; imports from analysis/ and golden_model/)
 """
 
 import time
 import numpy as np
 from tabulate import tabulate
 from tqdm import tqdm
+
+import sys
+from pathlib import Path
+_ROOT = Path(__file__).resolve().parents[1]
+sys.path[:0] = [str(_ROOT / "analysis"), str(_ROOT / "golden_model"), str(_ROOT / "explorations")]
 
 import K_4_HDC_Way1_vs_Way2 as H          # data loading and statistics
 import lda_golden_model as G

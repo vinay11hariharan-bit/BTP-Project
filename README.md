@@ -23,32 +23,37 @@ All accuracies are leave-one-subject-out (LOSO) on FORS-EMG, 4 gestures
 | RTL vs golden model, whole chip, C = 8 … 24 channels | bit-exact (x_q, scores, class) |
 | Worst-case Stage 2 + 3 time (C = 24) | 850 of 1015 cycles per sample at 1 MHz |
 
-Details: [`information.txt`](information.txt) (model search), [`RTL/README.md`](RTL/README.md) (hardware),
+Details: [`docs/technical_summary.md`](docs/technical_summary.md) (model search), [`RTL/README.md`](RTL/README.md) (hardware),
 and the explorations section below.
 
 ## Repository map
 
 ```
 .
-├── README.md                       this file
-├── information.txt                 technical summary of the model search (preprocessing, INT8 scheme, results)
-├── K_4_LDA_Analysis.py             MAIN pipeline: loading, filtering, windowing, integer features, INT8 LDA, LOSO
-├── lda_golden_model.py             bit-exact Python model of the chip (Stages 1-3); training + test vectors
-├── K_4_LDA_Golden_LOSO.py          chip model vs software LDA on FORS-EMG (paired LOSO)
-├── K_4_LDA_HW_Experiments.py       choice of the multiplier-free feature set (H1-H6) and the shift normaliser
-├── K_4_LDA_Calib.py                LDA with per-user calibration (blending class means / covariance)
-├── fors_emg_feature_selection_lda.py  nested-LOSO feature-type selection for the LDA
-├── classifier_classification.py    8-classifier comparison (linear, trees, MLP) under one protocol
-├── K_4_model_MLP.py                INT8 MLP benchmark, 4 gestures
-├── K_6_model_LR_comparison.py      MLP vs Logistic Regression, best 6-gesture subset
-├── K_4_CNN_LOSO.py                 raw-signal CNNs (depthwise-separable, two-branch) vs INT8 LDA
-├── K_4_CNN_Calib.py                CNN with per-user fine-tuning
-├── K_4_HDC_Way1_vs_Way2.py         exploration: hyperdimensional computing on features vs on samples
-├── K_4_HDC_Calib.py                exploration: HDC with on-chip-style per-user calibration
-├── K_4_TM_Calib.py                 exploration: Tsetlin machine with per-user calibration
-├── K_2_CTBAI_Stopping.py           exploration: correlated best-arm-identification stopping rules
-├── RTL/                            Verilog of the chip + chip-level cocotb testbench (see RTL/README.md)
-└── archive/                        FORS-EMG dataset (Subject1 … Subject19)
+├── README.md
+├── analysis/                        software pipeline and model search (all on FORS-EMG, LOSO)
+│   ├── K_4_LDA_Analysis.py          MAIN pipeline: loading, filtering, windowing, integer features, INT8 LDA
+│   ├── K_4_LDA_HW_Experiments.py    choice of the multiplier-free feature set (H1-H6) and the shift normaliser
+│   ├── fors_emg_feature_selection_lda.py  nested-LOSO feature-type selection
+│   ├── classifier_classification.py 8-classifier comparison (linear, trees, MLP)
+│   ├── K_4_model_MLP.py             INT8 MLP benchmark, 4 gestures
+│   ├── K_6_model_LR_comparison.py   MLP vs Logistic Regression, best 6-gesture subset
+│   ├── K_4_LDA_Calib.py             LDA with per-user calibration
+│   ├── K_4_CNN_LOSO.py              raw-signal CNNs vs INT8 LDA
+│   └── K_4_CNN_Calib.py             CNN with per-user fine-tuning
+├── golden_model/
+│   ├── lda_golden_model.py          bit-exact Python model of the chip (Stages 1-3); training + test vectors
+│   └── K_4_LDA_Golden_LOSO.py       chip model vs software LDA on FORS-EMG (paired LOSO)
+├── explorations/                    alternatives evaluated in Nov 2026
+│   ├── K_4_HDC_Way1_vs_Way2.py      hyperdimensional computing on features vs on samples
+│   ├── K_4_HDC_Calib.py             HDC with per-user calibration
+│   ├── K_4_TM_Calib.py              Tsetlin machine with per-user calibration
+│   └── K_2_CTBAI_Stopping.py        correlated best-arm-identification stopping rules
+├── RTL/                             Verilog of the chip + chip-level cocotb testbench (RTL/README.md)
+├── docs/
+│   ├── technical_summary.md         model search: preprocessing, INT8 scheme, results
+│   └── report/                      project report (LaTeX source, figures, PDF)
+└── archive/                         FORS-EMG dataset (Subject<i>/<orientation>/<gesture>-<trial>.mat)
 ```
 
 ## Setup
@@ -59,10 +64,11 @@ pip install torch                                          # MLP and CNN scripts
 brew install icarus-verilog && pip install cocotb          # RTL simulation (macOS; apt install iverilog on Linux)
 ```
 
-Set the dataset path once: `BASE_DIR` at the top of `K_4_LDA_Analysis.py` must point to the folder
-that contains `Subject1/ … Subject19/` (in this repo: `archive/FORS-EMG Dataset/FORS-EMG Dataset/FORS-EMG`).
-Every other script imports its data loading from `K_4_LDA_Analysis.py`, so all scripts see the same
-filter, windows and folds. All scripts print results only and write no files.
+Run every script from the repository root, for example `python analysis/K_4_LDA_Analysis.py` or
+`python explorations/K_4_TM_Calib.py`. The dataset is found automatically in `archive/`; to use another
+copy, set `BASE_DIR` at the top of `analysis/K_4_LDA_Analysis.py`. The scripts in `golden_model/` and
+`explorations/` import their data loading from `analysis/K_4_LDA_Analysis.py`, so every script sees the
+same filter, windows and folds. Scripts print their results; the older analysis scripts also save a results CSV in the working directory.
 
 ## Evaluation protocol (shared by every script)
 
@@ -87,7 +93,7 @@ filter, windows and folds. All scripts print results only and write no files.
 4. **Hardware.** Scope fixed in Oct 2026 to an LDA-only fixed-function core (CNN/ISA work by Yash and
    Digvijay explored the programmable alternative). Extensible mother–daughter design: one compute
    core, 1–3 daisy-chained 8-channel ADC pods (8–24 electrodes) set by one register.
-5. **Verification.** A bit-exact golden model (`lda_golden_model.py`) drives exhaustive unit tests and a
+5. **Verification.** A bit-exact golden model (`golden_model/lda_golden_model.py`) drives exhaustive unit tests and a
    chip-level cocotb testbench; the chip reproduces the golden model's decisions bit for bit.
 
 ## Branches
@@ -105,9 +111,9 @@ user's other trials only.
 
 | Script | Idea | Result |
 |---|---|---|
-| `K_4_HDC_Way1_vs_Way2.py` | Hyperdimensional computing, no multipliers. Way 1 encodes the 40 features, Way 2 encodes per-sample envelopes with 3-step sequences | Way 1 60.2 %, Way 2 67.0 %, LDA 77.4 % (18 subjects) |
-| `K_4_HDC_Calib.py` | HDC prototypes updated on chip with the calibration trial (additions only) | Way 2: 66.7 → 77.9 %, matches the LDA (78.9 % with calibration) |
-| `K_4_TM_Calib.py` | Tsetlin machine (logic-only clauses, learning automata) with calibration | 72.1 → 80.7 ± 2.7 %; worst user 72 % vs 61 % for LDA; memory too large for this chip |
-| `K_2_CTBAI_Stopping.py` | Binary decisions as two-armed correlated Gaussian best-arm identification (cost-weighted, joint pulls); decide when confident | error per decision 6.6 % → 0.2–1.1 % on 5 of 6 gesture pairs in about 1.8 s with the mixture-martingale rule |
+| `explorations/K_4_HDC_Way1_vs_Way2.py` | Hyperdimensional computing, no multipliers. Way 1 encodes the 40 features, Way 2 encodes per-sample envelopes with 3-step sequences | Way 1 60.2 %, Way 2 67.0 %, LDA 77.4 % (18 subjects) |
+| `explorations/K_4_HDC_Calib.py` | HDC prototypes updated on chip with the calibration trial (additions only) | Way 2: 66.7 → 77.9 %, matches the LDA (78.9 % with calibration) |
+| `explorations/K_4_TM_Calib.py` | Tsetlin machine (logic-only clauses, learning automata) with calibration | 71.9 → 80.2 ± 2.8 % (18 subjects); worst user 71 % vs 61 % for LDA; memory too large for this chip |
+| `explorations/K_2_CTBAI_Stopping.py` | Binary decisions as two-armed correlated Gaussian best-arm identification (cost-weighted, joint pulls); decide when confident | error per decision 6.6 % → 0.2–1.1 % on 5 of 6 gesture pairs in about 1.8 s with the mixture-martingale rule |
 
-A consolidated project report is in preparation.
+The full project report is in [`docs/report/`](docs/report/).

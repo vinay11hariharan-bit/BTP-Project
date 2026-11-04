@@ -1,45 +1,54 @@
 """
-FORS-EMG TinyML Architecture Benchmark
-=======================================
-Evaluates the selected INT8 MLP on the selected 4-gesture subset.
+FORS-EMG TinyML Benchmark — Best 6-Gesture Subset (Validation Run)
+=====================================================================
+Validates the "best k=6" gesture subset identified by analysing the actual
+12-class confusion matrix (from fors_emg_benchmark_12class.py's real run) —
+not a fresh search, an empirical estimate that this run either confirms or
+corrects.
 
-Configuration decided from prior analysis
-------------------------------------------
-* Gestures: Hand Close, Hand Open, Wrist Flexion, Wrist Extension — chosen via
-  two-stage pairwise-separability search over all 12 FORS-EMG gestures, after
-  the original {Hand Close, Hand Open, Index, Index Little} set showed the
-  Index/Index Little pair alone accounted for ~40% of all classification
-  errors (fine finger movements recruiting overlapping forearm muscles,
-  poorly resolved by surface EMG).
-* Architecture: 64→16→4 (1,168 B, 1,088 MACs) — the 5-way architecture sweep
-  on the original gesture set found all candidates statistically tied
-  (rank-order unstable across 3 runs, spread 1.3 pp vs. ±5.9 pp 95% CI), so
-  architecture is fixed here rather than re-swept; edit HIDDEN_WIDTHS below to
-  re-enable the sweep on this gesture set if desired.
+Selected gestures: Hand Close, Hand Open, Peace, Radial Deviation,
+Right Angle, Wrist Flexion — chosen by ranking all C(12,6)=924 possible
+6-gesture subsets by worst-pair confusability (the most-confused pair within
+the subset), computed directly from the real trained-classifier confusion
+matrices (MLP and Logistic Regression, averaged). This subset's worst pair
+sits at 5.6% confusability, vs. 13.5% for the previously-tested 4-gesture set
+{Hand Close, Hand Open, Wrist Flexion, Wrist Extension} — so despite having
+50% more classes, it should be LESS confused on its hardest pair, not more.
 
-Protocol
---------
-* Data loading: project-native loader — iterates Subject<i>/<Orientation>/
-  <gesture>-<trial>.mat, handles both (8000,8) and (8,8000) mat layouts,
-  carries full metadata (subject, orientation, trial, rec_id).
-* Features: 8 TD features × 8 channels = 64-D input vector per window.
-* Windowing: 200 ms windows, 100 ms increment (50% overlap) at 985 Hz.
-  Windows are cut AFTER the LOSO split — no window ever crosses the
-  train/test boundary.
-* Statistics (StandardScaler) fit on training windows ONLY.
-* Preprocessing: 20-450 Hz bandpass + 50 Hz mains notch, applied once per
-  recording before windowing.
-* Training: FP32 PyTorch MLP, Adam + CosineAnnealingLR, early stopping with
-  a trial-level (not window-level) validation split.
-* Quantisation: symmetric per-tensor INT8 PTQ; biases as INT32.
-  Requant multiplier M = sw·sx/sy decomposed as M0·2^-n (pure integer
-  hardware arithmetic — no float at inference time).
+What this run is actually testing
+------------------------------------
+The confusion-matrix analysis gave a "floor" accuracy of 53.5% (a genuine
+lower bound: what the 12-way classifier got right when restricted to these
+6 classes, treating any prediction that fell on an excluded gesture as
+wrong) and a calibrated central estimate around 66%, extrapolated from the
+ONE data point available (the 4-gesture set's floor undershot its real
+retrained accuracy by 19.3 pp). This run replaces that extrapolation with
+an actual number.
+
+Pipeline (identical to fors_emg_benchmark_12class.py)
+--------------------------------------------------------
+* Logistic Regression trains alongside the MLP in the SAME LOSO fold —
+  identical splits, features, and scaler, so the comparison is exact.
+* 20-450 Hz bandpass + 50 Hz mains notch, applied once per recording.
+* 200 ms windows / 100 ms increment, cut AFTER every split boundary.
+* LOSO across subjects; trial-level (not window-level) validation split.
+* StandardScaler + INT8 PTQ calibration scale, both fit on training data only.
+* Architecture fixed at 64→16→6 (same 16-unit hidden layer as every other
+  run in this series, so any accuracy change reflects gesture separability,
+  not a confounded capacity change). Budget: 1,208 B / 1,120 MACs — trivial.
+
+Difference from fors_emg_benchmark_12class.py
+--------------------------------------------------
+Gestures are a FIXED list of 6 (not auto-discovered), since we deliberately
+want exactly this subset — but the script still verifies these 6 file
+prefixes actually exist somewhere in your archive before running, so a
+naming mismatch fails loudly instead of silently loading zero recordings.
 
 Configuration
 -------------
   Set BASE_DIR below to the root folder that contains Subject1/, Subject2/, …
   Then run:
-      python fors_emg_benchmark.py
+      python fors_emg_benchmark_6class.py
 """
 
 import os, sys, time, warnings, csv
@@ -51,7 +60,9 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import TensorDataset, DataLoader
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import accuracy_score
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
+from scipy import stats
 from tqdm import tqdm
 from tabulate import tabulate
 
@@ -60,31 +71,69 @@ torch.manual_seed(0)
 np.random.seed(0)
 
 # ─── Dataset configuration ────────────────────────────────────────────────────
-# ↓ Edit this to match your local path
+# ↓ Edit this to match your local path (same archive fors_emg_benchmark.py uses)
 BASE_DIR = r"/Users/vinayhariharan/Projects/BTP/NN_model/archive/FORS-EMG Dataset/FORS-EMG Dataset/FORS-EMG"
+if not os.path.isdir(BASE_DIR):   # fall back to the copy of the dataset inside this repository
+    BASE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "archive",
+                            "FORS-EMG Dataset", "FORS-EMG Dataset", "FORS-EMG")
 
-# Gesture class index → file prefix
-# Updated from the original {Hand_Close, Hand_Open, Index, Index_Little} set
-# based on the two-stage pairwise-separability search: Index vs Index_Little
-# was the dominant confusion (~40% of all errors), while wrist flexion/
-# extension recruit distinct superficial muscle compartments and should be
-# far more separable on 8-channel surface EMG.
-CLASSES = [0, 1, 2, 3]
-GESTURE_FILE_MAP = {
-    0: "Hand_Close",
-    1: "Hand_Open",
-    2: "Wrist_Flexion",
-    3: "Wrist_Extension",
-}
-GESTURE_NAMES = {
-    0: "Hand Close",
-    1: "Hand Open",
-    2: "Wrist Flexion",
-    3: "Wrist Extension",
-}
 FOREARM_ORIENTATIONS = ["Rest", "Supination", "Pronation"]
-N_TRIALS = 5
+N_TRIALS   = 5
 N_SUBJECTS = 19   # subjects 1–19
+
+# The best-k=6 subset by worst-pair confusability, computed from the actual
+# 12-class confusion matrices (see module docstring). File prefixes below
+# are the exact spellings confirmed by the 12-gesture run's auto-discovery
+# on your real archive — not guessed.
+SELECTED_GESTURE_PREFIXES = [
+    "Hand_Close", "Hand_Open", "Peace",
+    "Radial_Deviation", "Right_Angle", "Wrist_Flexion",
+]
+
+
+def verify_gestures_exist(prefixes, base_dir=BASE_DIR,
+                          orientations=FOREARM_ORIENTATIONS,
+                          n_subjects=N_SUBJECTS):
+    """
+    Confirms every requested gesture prefix actually has at least one .mat
+    file somewhere in the archive, BEFORE running anything else. A fixed
+    hardcoded gesture list (unlike auto-discovery) fails silently if a name
+    is wrong — this check turns that into a loud, specific error instead of
+    a run that quietly loads zero recordings for a mistyped gesture.
+    """
+    found_prefixes = set()
+    for sid in range(1, n_subjects + 1):
+        for ori in orientations:
+            d = os.path.join(base_dir, f"Subject{sid}", ori)
+            if not os.path.isdir(d):
+                continue
+            for fn in os.listdir(d):
+                if fn.endswith(".mat") and "-" in fn[:-4]:
+                    found_prefixes.add(fn[:-4].rsplit("-", 1)[0])
+
+    missing = [p for p in prefixes if p not in found_prefixes]
+    if missing:
+        print(f"\n  ERROR: {len(missing)} requested gesture(s) not found "
+              f"anywhere in the archive:")
+        for m in missing:
+            print(f"    ✗ {m}")
+        print(f"\n  Gestures that WERE found in the archive:")
+        for f in sorted(found_prefixes):
+            flag = " (requested)" if f in prefixes else ""
+            print(f"    {f}{flag}")
+        print(f"\n  Fix SELECTED_GESTURE_PREFIXES at the top of this file to "
+              f"match the exact names above, then re-run.\n")
+        sys.exit(1)
+    print(f"  Verified all {len(prefixes)} requested gestures exist in the archive:")
+    for p in prefixes:
+        print(f"    ✓ {p}")
+
+
+verify_gestures_exist(SELECTED_GESTURE_PREFIXES)
+
+CLASSES          = list(range(len(SELECTED_GESTURE_PREFIXES)))
+GESTURE_FILE_MAP = {i: name for i, name in enumerate(SELECTED_GESTURE_PREFIXES)}
+GESTURE_NAMES    = {i: name.replace("_", " ") for i, name in enumerate(SELECTED_GESTURE_PREFIXES)}
 
 # ─── Signal / feature constants ───────────────────────────────────────────────
 FS          = 985
@@ -92,7 +141,7 @@ WIN_SAMPLES = int(200 * FS / 1000)   # 197 samples  @ 200 ms
 INC_SAMPLES = int(100 * FS / 1000)   #  98 samples  @ 100 ms
 N_CHANNELS  = 8
 N_FEATURES  = 8                       # per channel
-N_CLASSES   = len(CLASSES)            # 4
+N_CLASSES   = len(CLASSES)            # 12
 INPUT_DIM   = N_CHANNELS * N_FEATURES # 64
 
 # ─── Quantisation constants ───────────────────────────────────────────────────
@@ -101,21 +150,13 @@ INT8_MIN  = -128
 CALIB_PCT = 99.9   # percentile for robust scale computation
 REQUANT_SHIFT = 31 # fixed-point precision of the requantisation multiplier
 
-# ─── Architecture search space ────────────────────────────────────────────────
-# Fixed to the single selected architecture. The prior 5-way sweep showed all
-# candidates were statistically indistinguishable (spread 1.3 pp vs. ±5.9 pp
-# 95% CI, unstable rank order across runs, ~13% power to detect 1 pp) — the
-# accuracy ceiling was set by gesture separability, not model capacity. 64→16→4
-# is the defensible pick: smallest model retaining nonlinear capacity, tied
-# with every larger candidate. Re-add widths here if you want the full sweep
-# on this new gesture set instead of just this one architecture.
+# ─── Architecture ──────────────────────────────────────────────────────────────
+# Fixed at the same 16-unit hidden layer used for the 4-gesture run, on
+# purpose — see module docstring. Budget at N_CLASSES=6: 1,208 B /
+# 1,120 MACs, still comfortably under 10 KB.
 HIDDEN_WIDTHS = [16]
 
 # ─── Preprocessing filter configuration ───────────────────────────────────────
-# Standard sEMG conditioning: removes DC offset / motion artifact below the
-# bandpass low edge and high-frequency noise above the high edge, then a notch
-# at the mains frequency. FORS-EMG was collected in Bangladesh → 50 Hz mains;
-# change to 60.0 if your recording setup used 60 Hz power.
 APPLY_FILTER    = True
 BANDPASS_HZ     = (20.0, 450.0)
 MAINS_NOTCH_HZ  = 50.0
@@ -128,6 +169,8 @@ DROPOUT      = 0.2
 BATCH_SIZE   = 128
 MAX_EPOCHS   = 200
 PATIENCE     = 15
+
+LR_MAX_ITER  = 300   # Logistic Regression solver iterations (lbfgs, multinomial)
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -144,9 +187,7 @@ def _load_single_subject(
 ) -> tuple:
     """
     Loads raw sEMG recording matrices and per-recording metadata for ONE
-    subject.  This is your original load_fors_emg() function, unchanged in
-    logic, extended only to accept subject_id as an argument so the benchmark
-    can call it for each of the 19 subjects.
+    subject. Identical logic to fors_emg_benchmark.py's loader.
 
     Returns
     -------
@@ -159,7 +200,7 @@ def _load_single_subject(
 
     subject_dir = os.path.join(base_dir, f"Subject{subject_id}")
     if not os.path.isdir(subject_dir):
-        return recordings, recording_meta   # subject folder absent → skip silently
+        return recordings, recording_meta
 
     rec_id = 0
     for orientation in orientations:
@@ -177,13 +218,12 @@ def _load_single_subject(
                         continue
                     if val.ndim != 2:
                         continue
-                    # Normalise to (8000, 8) regardless of storage orientation
                     if val.shape == (8000, 8):
                         data = val.astype(np.float64)
                     elif val.shape == (8, 8000):
                         data = val.T.astype(np.float64)
                     else:
-                        continue   # unexpected shape — skip
+                        continue
 
                     recordings.append(data)
                     recording_meta.append({
@@ -194,24 +234,13 @@ def _load_single_subject(
                         "rec_id":      rec_id,
                     })
                     rec_id += 1
-                    break   # one valid array per .mat file is enough
+                    break
 
     return recordings, recording_meta
 
 
 def load_all_subjects(base_dir: str = BASE_DIR) -> list:
-    """
-    Calls _load_single_subject() for each of the 19 subjects and packages
-    the results into the per-subject structure expected by LOSO-CV.
-
-    Returns
-    -------
-    subjects : list of dicts, each with:
-        'subject_id'  : int
-        'recordings'  : list of (8000, 8) float64 arrays   [raw signal]
-        'labels'      : list of int   [class index 0-3, one per recording]
-        'meta'        : list of dict  [full metadata per recording]
-    """
+    """Calls _load_single_subject() for every subject 1..N_SUBJECTS."""
     if not os.path.isdir(base_dir):
         print(f"\n  ERROR: dataset root not found:\n    {base_dir}")
         print("  Set BASE_DIR at the top of this file to the folder that "
@@ -236,7 +265,6 @@ def load_all_subjects(base_dir: str = BASE_DIR) -> list:
 # ─── Signal conditioning (bandpass + mains notch) ─────────────────────────────
 
 def _design_filters(fs=FS, band=BANDPASS_HZ, notch_freq=MAINS_NOTCH_HZ, notch_q=NOTCH_Q):
-    """Design the bandpass + notch filter coefficients once (cheap, reused)."""
     nyq = fs / 2.0
     low  = band[0] / nyq
     high = min(band[1], nyq - 1.0) / nyq
@@ -246,11 +274,6 @@ def _design_filters(fs=FS, band=BANDPASS_HZ, notch_freq=MAINS_NOTCH_HZ, notch_q=
 
 
 def apply_preprocessing_filter(sig_channels_first, filt_coeffs):
-    """
-    sig_channels_first : (n_channels, n_samples)
-    Applies zero-phase (filtfilt) 4th-order Butterworth bandpass, then a
-    zero-phase notch at the mains frequency, independently per channel.
-    """
     (b_bp, a_bp), (b_n, a_n) = filt_coeffs
     sig = filtfilt(b_bp, a_bp, sig_channels_first, axis=-1)
     sig = filtfilt(b_n,  a_n,  sig,                axis=-1)
@@ -258,12 +281,7 @@ def apply_preprocessing_filter(sig_channels_first, filt_coeffs):
 
 
 def filter_all_subjects(subjects, apply_filter=APPLY_FILTER):
-    """
-    Applies the bandpass+notch filter ONCE per recording, in place, before any
-    windowing or LOSO splitting happens. Filtering once here (rather than
-    inside the LOSO loop) avoids redundant recomputation — each recording is
-    reused as training data in 18 of the 19 folds.
-    """
+    """Filters ONCE per recording, before any windowing or LOSO splitting."""
     if not apply_filter:
         print("  Preprocessing filter: DISABLED (APPLY_FILTER=False)")
         return subjects
@@ -275,10 +293,9 @@ def filter_all_subjects(subjects, apply_filter=APPLY_FILTER):
     for s in tqdm(subjects, desc="Filtering signals"):
         filtered = []
         for rec in s["recordings"]:
-            # rec is (8000, 8) per your loader's convention
-            sig_cf = rec.T                                   # → (8, 8000)
+            sig_cf = rec.T
             sig_filtered = apply_preprocessing_filter(sig_cf, filt_coeffs)
-            filtered.append(sig_filtered.T.astype(np.float64))   # back to (8000, 8)
+            filtered.append(sig_filtered.T.astype(np.float64))
         s["recordings"] = filtered
     return subjects
 
@@ -286,38 +303,27 @@ def filter_all_subjects(subjects, apply_filter=APPLY_FILTER):
 # ─── Feature extraction ───────────────────────────────────────────────────────
 
 def extract_features_from_windows(windows):
-    """
-    windows : (N, C, L)  →  features : (N, 64)
-    8 features per channel: MAV, RMS, WL, ZC, SSC, VAR, WAMP, IEMG
-    """
+    """windows : (N, C, L) → features : (N, 64). Identical to fors_emg_benchmark.py."""
     N, C, L = windows.shape
     x    = windows
     dx   = np.diff(x, axis=2)
     xabs = np.abs(x)
 
-    mav  = xabs.mean(axis=2)                              # (N, C)
+    mav  = xabs.mean(axis=2)
     rms  = np.sqrt((x**2).mean(axis=2))
     wl   = np.abs(dx).sum(axis=2)
 
-    # ZC with 1% RMS deadband
     thr  = rms * 0.01
     sx   = np.sign(x)
     zc   = ((sx[:,:,1:] != sx[:,:,:-1]) &
             ((xabs[:,:,:-1] >= thr[:,:,None]) |
              (xabs[:,:,1:]  >= thr[:,:,None]))).sum(axis=2)
 
-    # SSC
     ssc  = ((dx[:,:,1:] * dx[:,:,:-1]) < 0).sum(axis=2)
 
     var  = x.var(axis=2)
-    # WAMP: threshold relative to signal scale (2% of window RMS), NOT a fixed
-    # absolute value. A fixed threshold (e.g. 0.002) silently saturates or
-    # collapses to zero if the .mat files store raw ADC codes rather than
-    # calibrated microvolts — this dataset's units were never verified, so a
-    # scale-relative threshold is the safe choice. rms is (N,C); broadcast
-    # against dx (N,C,L-1) via the trailing None axis.
-    wamp_thr = (rms * 0.02)[:, :, None]          # (N, C, 1)
-    wamp = (np.abs(dx) > wamp_thr).sum(axis=2)   # (N, C)
+    wamp_thr = (rms * 0.02)[:, :, None]
+    wamp = (np.abs(dx) > wamp_thr).sum(axis=2)
     iemg = xabs.sum(axis=2)
 
     feat = np.stack([mav, rms, wl, zc, ssc, var, wamp, iemg], axis=2)
@@ -325,25 +331,10 @@ def extract_features_from_windows(windows):
 
 
 def windows_from_recordings(recordings: list, labels: list) -> tuple:
-    """
-    Slide fixed-length windows over each raw recording without crossing the
-    recording boundary.  This is the correct windowing approach for LOSO: you
-    call this separately for each split so windows never straddle train/test.
-
-    Parameters
-    ----------
-    recordings : list of (8000, 8) float64 arrays   — your loader's output
-    labels     : list of int   — one label per recording
-
-    Returns
-    -------
-    windows : (N_windows, N_channels, WIN_SAMPLES)  float32
-    y       : (N_windows,)  int64
-    """
+    """Slides windows over each recording without crossing recording boundaries."""
     all_win, all_lbl = [], []
     for rec, lbl in zip(recordings, labels):
-        # rec is (8000, 8) — your loader guarantees this
-        sig    = rec.T                                      # → (8, 8000)
+        sig    = rec.T
         n_samp = sig.shape[1]
         starts = np.arange(0, n_samp - WIN_SAMPLES + 1, INC_SAMPLES)
         for s in starts:
@@ -360,7 +351,6 @@ def windows_from_recordings(recordings: list, labels: list) -> tuple:
 # ─── INT8 PTQ ─────────────────────────────────────────────────────────────────
 
 def compute_scale(arr):
-    """Symmetric per-tensor scale from 99.9-percentile of |arr|."""
     v = np.percentile(np.abs(arr.ravel()), CALIB_PCT)
     return float(v) / INT8_MAX if v > 0 else 1.0
 
@@ -368,20 +358,12 @@ def quantize_to_int8(arr, scale):
     return np.clip(np.round(arr / scale), INT8_MIN, INT8_MAX).astype(np.int8)
 
 def ptq_and_infer(model_fp32, X_calib, X_test):
-    """
-    Post-training INT8 quantization and integer-arithmetic inference.
-    Calibration uses X_calib (training features, already normalised).
-    """
+    """Post-training INT8 quantisation + integer-arithmetic inference."""
     model_fp32.eval()
-
-    # Collect linear layers in order
     linears = [(n, m) for n, m in model_fp32.named_modules()
                if isinstance(m, nn.Linear)]
 
-    # Input scale
     sx = compute_scale(X_calib)
-
-    # Per-layer calibration (FP32 forward on calibration set)
     x_fp = X_calib.copy()
     layer_info = []
     for i, (name, lin) in enumerate(linears):
@@ -397,12 +379,8 @@ def ptq_and_infer(model_fp32, X_calib, X_test):
             sy = compute_scale(np.maximum(0, z))
             x_fp = np.maximum(0, z)
 
-        # Requantisation multiplier M = sw*sx/sy, expressed as (M0, shift) so
-        # that y = (z*M0) >> shift reproduces round(M*z) with integer ops only.
-        # A FIXED non-negative shift is used deliberately: deriving the shift
-        # from ceil(-log2(M)) breaks whenever M > 1, because the shift goes
-        # negative and a negative right-shift is undefined. A fixed shift is
-        # valid for any M > 0 and is what hardware would hard-wire anyway.
+        # Fixed non-negative shift — valid for any M>0 (see fors_emg_benchmark.py
+        # for why deriving the shift from ceil(-log2(M)) breaks when M>1).
         M = (sw * sx) / sy
         n_shift = REQUANT_SHIFT
         M0 = int(np.round(M * (1 << REQUANT_SHIFT))) if M > 0 else 0
@@ -412,7 +390,6 @@ def ptq_and_infer(model_fp32, X_calib, X_test):
         layer_info.append((W_q, b_q, sy, M0, n_shift, is_last))
         sx = sy
 
-    # Integer-arithmetic inference on test set
     x_q = np.clip(np.round(X_test / compute_scale(X_calib)),
                   INT8_MIN, INT8_MAX).astype(np.int32)
 
@@ -420,14 +397,37 @@ def ptq_and_infer(model_fp32, X_calib, X_test):
         z = (x_q.astype(np.int64) @ W_q.T.astype(np.int64)
              + b_q[None, :].astype(np.int64))
         if is_last:
-            # argmax on the raw accumulator — requantisation is a monotone
-            # positive scaling and cannot change which logit is largest.
             return np.argmax(z, axis=1)
-        # Requantise (round-to-nearest, int64) + ReLU
         z_req = ((z * np.int64(M0)) + (np.int64(1) << (n_shift - 1))) >> n_shift
         x_q   = np.maximum(0, np.clip(z_req, INT8_MIN, INT8_MAX)).astype(np.int32)
 
-    return np.argmax(z, axis=1)   # fallback (linear model)
+    return np.argmax(z, axis=1)
+
+
+def quantize_linear_predict(W, b, X_calib, X_test):
+    """
+    Integer-only inference for a linear model (logits = W x + b), e.g.
+    Logistic Regression's coef_/intercept_. Symmetric per-tensor INT8
+    weights, INT32-domain bias — identical scheme to the MLP's PTQ, just
+    without a hidden layer or requantisation step (a single linear layer's
+    argmax is invariant to the accumulator's scale, so none is needed).
+    """
+    sx, sw = compute_scale(X_calib), compute_scale(W)
+    Wq = np.clip(np.round(W / sw), INT8_MIN, INT8_MAX).astype(np.int64)
+    bq = np.round(np.asarray(b) / (sw * sx)).astype(np.int64)
+    xq = np.clip(np.round(X_test / sx), INT8_MIN, INT8_MAX).astype(np.int64)
+    return np.argmax(xq @ Wq.T + bq[None, :], axis=1)
+
+
+def linear_param_bytes():
+    """INT8 weights + INT32 bias for a single 64->N_CLASSES linear layer."""
+    return INPUT_DIM * N_CLASSES + N_CLASSES * 4
+
+def linear_num_params():
+    return INPUT_DIM * N_CLASSES + N_CLASSES
+
+def linear_macs():
+    return INPUT_DIM * N_CLASSES
 
 
 # ─── MLP ──────────────────────────────────────────────────────────────────────
@@ -448,9 +448,6 @@ def param_bytes(hidden):
     return (INPUT_DIM*hidden + hidden*4 + hidden*N_CLASSES + N_CLASSES*4)
 
 def num_params(hidden):
-    """Real trainable parameter count (weights + biases), for overfitting
-    diagnostics — distinct from param_bytes(), which accounts INT8 weight
-    bytes + INT32 bias bytes for the hardware memory budget."""
     if hidden is None:
         return INPUT_DIM * N_CLASSES + N_CLASSES
     return (INPUT_DIM*hidden + hidden) + (hidden*N_CLASSES + N_CLASSES)
@@ -509,110 +506,101 @@ def train_model(X_tr, y_tr, X_val, y_val, hidden):
 # ─── LOSO-CV ──────────────────────────────────────────────────────────────────
 
 def _val_split_by_trial(recordings, labels, meta, val_trial_id=5):
-    """
-    Split one subject's recordings into train and val using trial index.
-
-    Val = all recordings from the last trial number (default: trial 5) across
-    every orientation and class.  Train = everything else.
-    This ensures the val windows come from genuinely unseen contractions rather
-    than time-adjacent segments of the same contraction — which is what a
-    last-10%-of-windows split produces and what caused the 63% plateau.
-
-    Parameters
-    ----------
-    recordings, labels, meta : outputs of load_all_subjects for one subject
-    val_trial_id : int  — trial number held out for validation (1-indexed)
-
-    Returns
-    -------
-    Four lists: train_recs, train_lbls, val_recs, val_lbls
-    """
+    """Trial 5 -> val, trials 1-4 -> train. Same rationale as fors_emg_benchmark.py:
+    a window-level split puts near-duplicate overlapping windows on both sides."""
     train_recs, train_lbls = [], []
     val_recs,   val_lbls   = [], []
-
     for rec, lbl, m in zip(recordings, labels, meta):
         if m["trial"] == val_trial_id:
             val_recs.append(rec);   val_lbls.append(lbl)
         else:
             train_recs.append(rec); train_lbls.append(lbl)
-
     return train_recs, train_lbls, val_recs, val_lbls
 
 
 def loso_cv(subjects, hidden):
     """
-    Leave-One-Subject-Out cross-validation.
+    Leave-One-Subject-Out cross-validation for BOTH the MLP and a Logistic
+    Regression classifier, trained within the SAME fold on the SAME
+    train/val/test split, features, and scaler — so the comparison is exact,
+    not just "close enough." LogReg reuses X_tr_n/y_tr_all/X_te_n/y_te that
+    are already computed for the MLP, so this is nearly free to add; it does
+    not repeat feature extraction, windowing, or splitting.
 
-    Key fixes vs. the initial version:
-    1. Val split is by trial index, not by window index.  Trial 5 (the last
-       trial per gesture per orientation) is reserved as val for every subject
-       in the training pool.  This gives ~16 val recordings per training
-       subject (4 classes × 3 orientations × 1 trial) with zero window overlap
-       with the remaining training trials.
-    2. StandardScaler is fit ONLY on the training recordings (trials 1-4),
-       then applied to both val and test — no statistics from val or test
-       contaminate the scaler.
-    3. PTQ calibration uses only training windows (not val), consistent with
-       how the scale would be derived on a real device before deployment.
+    Returns a dict keyed by model name, each with:
+        fp32, int8   : list of per-subject accuracies (len == n_subjects)
+        y_true, y_pred : pooled arrays across all folds (INT8 predictions)
     """
-    fp32_accs, int8_accs = [], []
+    mlp_fp32, mlp_int8, mlp_true, mlp_pred = [], [], [], []
+    lr_fp32,  lr_int8,  lr_true,  lr_pred  = [], [], [], []
     n = len(subjects)
 
     for test_idx in tqdm(range(n),
                          desc=f"  {arch_label(hidden):18s}",
                          leave=False):
-        # ── Outer LOSO split ─────────────────────────────────────────────────
         test_s   = subjects[test_idx]
         train_ss = [s for i, s in enumerate(subjects) if i != test_idx]
 
-        # Test set: ALL recordings from the held-out subject (windowed after split)
         X_te_win, y_te = windows_from_recordings(
             test_s['recordings'], test_s['labels'])
 
-        # ── Inner trial-based val split across all training subjects ──────────
-        # For each training subject, trial 5 → val, trials 1-4 → train.
-        # Using the last trial (highest index) as val is deterministic and
-        # avoids any form of look-ahead selection bias.
         all_train_recs, all_train_lbls = [], []
         all_val_recs,   all_val_lbls   = [], []
-
         for s in train_ss:
             tr_r, tr_l, va_r, va_l = _val_split_by_trial(
                 s['recordings'], s['labels'], s['meta'], val_trial_id=5)
             all_train_recs.extend(tr_r); all_train_lbls.extend(tr_l)
             all_val_recs.extend(va_r);   all_val_lbls.extend(va_l)
 
-        # Window AFTER every split boundary is fixed
         X_tr_win, y_tr_all = windows_from_recordings(all_train_recs, all_train_lbls)
         X_va_win, y_va     = windows_from_recordings(all_val_recs,   all_val_lbls)
 
-        # ── Feature extraction ───────────────────────────────────────────────
         X_tr_feat = extract_features_from_windows(X_tr_win)
         X_va_feat = extract_features_from_windows(X_va_win)
         X_te_feat = extract_features_from_windows(X_te_win)
 
-        # ── Normalisation: scaler fit on TRAIN only, applied to val + test ────
         sc      = StandardScaler()
         X_tr_n  = sc.fit_transform(X_tr_feat)
         X_va_n  = sc.transform(X_va_feat)
         X_te_n  = sc.transform(X_te_feat)
 
-        # ── FP32 training with proper early stopping on held-out val trials ───
+        # ── MLP ──────────────────────────────────────────────────────────────
         model = train_model(X_tr_n, y_tr_all, X_va_n, y_va, hidden)
-
-        # ── FP32 evaluation on test subject ───────────────────────────────────
         model.eval()
         with torch.no_grad():
             preds_fp = model(
                 torch.tensor(X_te_n, dtype=torch.float32)
             ).argmax(1).numpy()
-        fp32_accs.append(accuracy_score(y_te, preds_fp))
+        mlp_fp32.append(accuracy_score(y_te, preds_fp))
 
-        # ── INT8 PTQ: calibrate on training windows only, infer on test ───────
         preds_q8 = ptq_and_infer(model, X_tr_n, X_te_n)
-        int8_accs.append(accuracy_score(y_te, preds_q8))
+        mlp_int8.append(accuracy_score(y_te, preds_q8))
+        mlp_true.extend(y_te.tolist()); mlp_pred.extend(preds_q8.tolist())
 
-    return fp32_accs, int8_accs
+        # ── Logistic Regression ─────────────────────────────────────────────
+        # Same train set (X_tr_n, y_tr_all) the MLP just used — val split is
+        # irrelevant here since LogReg has no early-stopping / epochs.
+        lr = LogisticRegression(max_iter=LR_MAX_ITER)
+        lr.fit(X_tr_n, y_tr_all)
+        lr_p32 = lr.predict(X_te_n)
+        lr_fp32.append(accuracy_score(y_te, lr_p32))
+
+        lr_p8 = quantize_linear_predict(lr.coef_, lr.intercept_, X_tr_n, X_te_n)
+        lr_int8.append(accuracy_score(y_te, lr_p8))
+        lr_true.extend(y_te.tolist()); lr_pred.extend(lr_p8.tolist())
+
+    return {
+        arch_label(hidden): {
+            "fp32": mlp_fp32, "int8": mlp_int8,
+            "y_true": np.array(mlp_true), "y_pred": np.array(mlp_pred),
+            "bytes": param_bytes(hidden), "macs": num_macs(hidden),
+        },
+        "Logistic Regression": {
+            "fp32": lr_fp32, "int8": lr_int8,
+            "y_true": np.array(lr_true), "y_pred": np.array(lr_pred),
+            "bytes": linear_param_bytes(), "macs": linear_macs(),
+        },
+    }
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
@@ -620,25 +608,21 @@ def loso_cv(subjects, hidden):
 def main():
     t0 = time.time()
     print("=" * 65)
-    print("  FORS-EMG TinyML Architecture Benchmark")
+    print("  FORS-EMG TinyML Benchmark — Best 6-Gesture Subset (Validation)")
     print("=" * 65)
 
-    # 1. Load raw recordings per subject (using your exact loader)
     subjects = load_all_subjects(BASE_DIR)
     total_recs = sum(len(s['recordings']) for s in subjects)
     print(f"\n  Subjects loaded  : {len(subjects)}")
     print(f"  Total recordings : {total_recs}")
-    print(f"  Target gestures  : {', '.join(GESTURE_NAMES[c] for c in CLASSES)}")
+    print(f"  Target gestures  : {N_CLASSES}  "
+          f"({', '.join(GESTURE_NAMES[c] for c in CLASSES)})")
     print(f"  Orientations     : {', '.join(FOREARM_ORIENTATIONS)}")
     print(f"  Window           : {WIN_SAMPLES} samples ({200} ms), "
           f"increment {INC_SAMPLES} samples ({100} ms)")
     print(f"  Input dim        : {INPUT_DIM}  ({N_CHANNELS} ch × {N_FEATURES} feats)")
     print(f"  Device           : {DEVICE}")
 
-    # ── Raw signal scale diagnostic ─────────────────────────────────────────
-    # Confirms whether feature thresholds (e.g. WAMP, ZC deadband) are sensibly
-    # calibrated to this dataset's actual units. If |max| is O(1e2-1e3), the
-    # .mat files likely store raw ADC codes rather than calibrated microvolts.
     sample_rec = subjects[0]['recordings'][0]
     print(f"\n  Raw signal scale check (Subject{subjects[0]['subject_id']}, "
           f"first recording):")
@@ -646,40 +630,35 @@ def main():
           f"max={sample_rec.max():.4f}  mean={sample_rec.mean():.4f}  "
           f"std={sample_rec.std():.4f}")
 
-    # 2. Bandpass + notch filtering (once, before any windowing)
     subjects = filter_all_subjects(subjects, apply_filter=APPLY_FILTER)
 
-    # Class balance across all subjects
     all_labels = [lbl for s in subjects for lbl in s['labels']]
     print(f"\n  Class balance (recordings):")
     for c in CLASSES:
         cnt = all_labels.count(c)
-        print(f"    [{c}] {GESTURE_NAMES[c]:14s}: {cnt:4d}  "
+        print(f"    [{c:2d}] {GESTURE_NAMES[c]:16s}: {cnt:4d}  "
               f"({cnt/len(all_labels)*100:.1f}%)")
 
-    # 2. Budget table
     print(f"\n{'─'*65}")
-    print("  Architecture budget (INT8 weights + INT32 biases)")
+    print("  Architecture / classifier budget (INT8 weights + INT32 biases)")
     print(f"{'─'*65}")
     brows = [[arch_label(h), f"{param_bytes(h):,}", f"{num_macs(h):,}",
               "✓" if param_bytes(h) <= 10_000 else "✗ OVER"]
              for h in HIDDEN_WIDTHS]
+    brows.append(["Logistic Regression", f"{linear_param_bytes():,}",
+                  f"{linear_macs():,}",
+                  "✓" if linear_param_bytes() <= 10_000 else "✗ OVER"])
     print(tabulate(brows,
-                   headers=["Architecture","Param bytes","MACs","≤10 KB?"],
+                   headers=["Model","Param bytes","MACs","≤10 KB?"],
                    tablefmt="rounded_outline"))
 
-    # ── Overfitting-risk diagnostic ─────────────────────────────────────────
-    # Estimates the samples-per-parameter ratio each architecture will see
-    # during LOSO training. This uses actual windowed counts from this run
-    # (not an assumption) — computed once here, before the (slow) LOSO sweep,
-    # so you see it regardless of how long training takes.
     total_windows = 0
     for s in subjects:
         w, _ = windows_from_recordings(s['recordings'], s['labels'])
         total_windows += len(w)
     avg_test_fold      = total_windows / len(subjects)
     avg_train_pool     = avg_test_fold * (len(subjects) - 1)
-    avg_train_post_val = avg_train_pool * (1 - 1.0 / N_TRIALS)  # 1 of N_TRIALS held out as val
+    avg_train_post_val = avg_train_pool * (1 - 1.0 / N_TRIALS)
 
     print(f"\n{'─'*65}")
     print("  Overfitting-risk check (real parameter count vs. training windows)")
@@ -690,119 +669,125 @@ def main():
     orows = [[arch_label(h), f"{num_params(h):,}",
               f"{avg_train_post_val / num_params(h):,.1f}x"]
              for h in HIDDEN_WIDTHS]
+    orows.append(["Logistic Regression", f"{linear_num_params():,}",
+                  f"{avg_train_post_val / linear_num_params():,.1f}x"])
     print(tabulate(orows,
-                   headers=["Architecture","Real params","Samples per param"],
+                   headers=["Model","Real params","Samples per param"],
                    tablefmt="rounded_outline"))
     print("  Rule of thumb: ≥5-10x samples per parameter is comfortable for a")
     print("  regularised shallow MLP. Below ~3x, treat results with caution.")
+    print("  (Logistic Regression's convex loss makes it far less overfitting-")
+    print("   prone than this ratio alone would suggest for a neural net.)")
 
-    # 3. LOSO-CV sweep
     print(f"\n{'─'*65}")
-    print(f"  LOSO-CV ({len(subjects)}-fold) — one fold per subject")
+    print(f"  LOSO-CV ({len(subjects)}-fold) — MLP and Logistic Regression, "
+          f"same folds")
     print(f"{'─'*65}\n")
+    # loso_cv trains both models per fold on identical splits/features, so
+    # there is exactly one HIDDEN_WIDTHS entry here (fixed architecture —
+    # see module docstring) but two model results come back from one call.
+    raw = loso_cv(subjects, HIDDEN_WIDTHS[0])
     results = {}
-    for h in HIDDEN_WIDTHS:
-        fp32, int8 = loso_cv(subjects, h)
-        label = arch_label(h)
+    for label, d in raw.items():
+        fp32, int8 = d["fp32"], d["int8"]
         results[label] = dict(
             fp32_mean=np.mean(fp32), fp32_std=np.std(fp32),
             int8_mean=np.mean(int8), int8_std=np.std(int8),
             q_drop=np.mean(fp32)-np.mean(int8),
-            pb=param_bytes(h), macs=num_macs(h),
-            fp32_folds=fp32, int8_folds=int8
+            pb=d["bytes"], macs=d["macs"],
+            fp32_folds=fp32, int8_folds=int8,
+            y_true=d["y_true"], y_pred=d["y_pred"],
         )
 
-    # 4. Results
     print(f"\n{'─'*65}")
     print("  Results  (mean ± std over subjects)")
     print(f"{'─'*65}")
+    order = sorted(results, key=lambda k: -results[k]["int8_mean"])
     rows = [[lbl,
-             f"{r['fp32_mean']*100:.2f}±{r['fp32_std']*100:.2f}",
-             f"{r['int8_mean']*100:.2f}±{r['int8_std']*100:.2f}",
-             f"{r['q_drop']*100:.2f}",
-             f"{r['pb']:,}",
-             f"{r['macs']:,}"]
-            for lbl, r in results.items()]
+             f"{results[lbl]['fp32_mean']*100:.2f}±{results[lbl]['fp32_std']*100:.2f}",
+             f"{results[lbl]['int8_mean']*100:.2f}±{results[lbl]['int8_std']*100:.2f}",
+             f"{results[lbl]['q_drop']*100:.2f}",
+             f"{results[lbl]['pb']:,}",
+             f"{results[lbl]['macs']:,}"]
+            for lbl in order]
     print(tabulate(rows,
-                   headers=["Architecture","FP32 %","INT8 %","Q-drop pp",
+                   headers=["Model","FP32 %","INT8 %","Q-drop pp",
                              "Bytes","MACs"],
                    tablefmt="rounded_outline"))
+    print(f"  Chance level: {100/N_CLASSES:.1f}%  ({N_CLASSES} classes)")
 
-    best = max(results, key=lambda k: results[k]['int8_mean'])
-    r = results[best]
-    print(f"\n  ★  Recommended: {best}")
-    print(f"     INT8 accuracy : {r['int8_mean']*100:.2f}% ± {r['int8_std']*100:.2f}%")
-    print(f"     Q-drop        : {r['q_drop']*100:.2f} pp")
-    print(f"     Param bytes   : {r['pb']:,} / 10,000")
-    print(f"     MACs/inference: {r['macs']:,}")
+    # ── Paired significance test — same 19 subjects, so between-subject
+    # variance cancels and this is the correct test (not two independent
+    # samples: MLP and LogReg were evaluated on the identical test windows).
+    mlp_label = arch_label(HIDDEN_WIDTHS[0])
+    lr_label  = "Logistic Regression"
+    d = np.array(results[lr_label]["int8_folds"]) - np.array(results[mlp_label]["int8_folds"])
+    t, p = stats.ttest_rel(results[lr_label]["int8_folds"], results[mlp_label]["int8_folds"])
+    ci = stats.t.ppf(0.975, len(d)-1) * d.std(ddof=1) / np.sqrt(len(d))
+    verdict = ("BETTER than MLP" if p < 0.05 and d.mean() > 0 else
+               "WORSE than MLP"  if p < 0.05 and d.mean() < 0 else
+               "statistically tied with MLP")
+    print(f"\n{'─'*65}")
+    print(f"  Paired test: Logistic Regression vs. {mlp_label}  (same {len(d)} subjects)")
+    print(f"{'─'*65}")
+    print(f"  Mean difference : {d.mean()*100:+.2f} pp  "
+          f"(95% CI {(d.mean()-ci)*100:+.2f} to {(d.mean()+ci)*100:+.2f})")
+    print(f"  Paired t-test   : t={t:.3f}, p={p:.4f}")
+    print(f"  Verdict         : Logistic Regression is {verdict}")
 
-    # 5. Per-subject breakdown for best architecture
-    print(f"\n  Per-subject INT8 accuracy ({best}):")
-    frows = [[f"S{i+1:02d}", f"{f:.2%}", f"{q:.2%}", f"{(f-q)*100:.2f}pp"]
-             for i,(f,q) in enumerate(zip(r['fp32_folds'],r['int8_folds']))]
-    print(tabulate(frows,
-                   headers=["Subject","FP32","INT8","Q-drop"],
-                   tablefmt="simple"))
+    # ── Per-subject accuracy, both models side by side ─────────────────────
+    print(f"\n  Per-subject INT8 accuracy (both models):")
+    srows = [[f"S{i+1:02d}"] + [f"{results[lbl]['int8_folds'][i]*100:.1f}" for lbl in order]
+             for i in range(len(subjects))]
+    srows.append(["MEAN"] + [f"{results[lbl]['int8_mean']*100:.1f}" for lbl in order])
+    print(tabulate(srows, headers=["Subj"] + order, tablefmt="simple"))
 
-    # 6. Diagnosis — rerun best arch on all subjects to get per-class confusion
-    print(f"\n  Per-class accuracy (INT8, {best}, pooled over all LOSO folds):")
-    best_h  = results[best].get('hidden', None)
-    # hidden is not stored in results dict yet — recover it
-    best_h  = HIDDEN_WIDTHS[list(results.keys()).index(best)]
+    # ── Per-model detail: classification report, confusion matrix, most-
+    # confused pairs. Both models get this, so you can see whether they
+    # struggle on the SAME gesture pairs or different ones.
+    for lbl in order:
+        r = results[lbl]
+        print(f"\n{'═'*65}")
+        print(f"  {lbl}  —  INT8 {r['int8_mean']*100:.2f}% ± {r['int8_std']*100:.2f}%")
+        print(f"{'═'*65}")
+        print(classification_report(
+            r['y_true'], r['y_pred'],
+            target_names=[GESTURE_NAMES[c] for c in CLASSES],
+            digits=3))
 
-    all_true, all_pred = [], []
-    for test_idx in range(len(subjects)):
-        test_s   = subjects[test_idx]
-        train_ss = [s for i, s in enumerate(subjects) if i != test_idx]
-        X_te_win, y_te = windows_from_recordings(test_s['recordings'], test_s['labels'])
+        cm = confusion_matrix(r['y_true'], r['y_pred'], labels=CLASSES)
+        print("  Confusion matrix (rows=true, cols=predicted; names truncated):")
+        short_names = [GESTURE_NAMES[c][:9] for c in CLASSES]
+        cm_rows = [[short_names[i]] + list(cm[i]) for i in range(N_CLASSES)]
+        print(tabulate(cm_rows,
+                       headers=["True \\ Pred"] + short_names,
+                       tablefmt="simple"))
 
-        all_tr_recs, all_tr_lbls = [], []
-        all_va_recs, all_va_lbls = [], []
-        for s in train_ss:
-            tr_r,tr_l,va_r,va_l = _val_split_by_trial(
-                s['recordings'], s['labels'], s['meta'])
-            all_tr_recs.extend(tr_r); all_tr_lbls.extend(tr_l)
-            all_va_recs.extend(va_r); all_va_lbls.extend(va_l)
+        print(f"\n  10 most-confused gesture pairs (off-diagonal, symmetrised):")
+        pair_err = []
+        for i in range(N_CLASSES):
+            for j in range(i+1, N_CLASSES):
+                e = cm[i, j] + cm[j, i]
+                if e > 0:
+                    pair_err.append((e, GESTURE_NAMES[CLASSES[i]], GESTURE_NAMES[CLASSES[j]]))
+        pair_err.sort(reverse=True)
+        total_err = cm.sum() - np.trace(cm)
+        for e, a, b in pair_err[:10]:
+            print(f"    {e:6,d} errors ({e/total_err*100:4.1f}% of all errors)   "
+                  f"{a} ↔ {b}")
 
-        X_tr_w, y_tr_w = windows_from_recordings(all_tr_recs, all_tr_lbls)
-        X_va_w, y_va_w = windows_from_recordings(all_va_recs, all_va_lbls)
-
-        sc2 = StandardScaler()
-        X_tr_n2 = sc2.fit_transform(extract_features_from_windows(X_tr_w))
-        X_va_n2 = sc2.transform(extract_features_from_windows(X_va_w))
-        X_te_n2 = sc2.transform(extract_features_from_windows(X_te_win))
-
-        m2 = train_model(X_tr_n2, y_tr_w, X_va_n2, y_va_w, best_h)
-        pq = ptq_and_infer(m2, X_tr_n2, X_te_n2)
-        all_true.extend(y_te.tolist())
-        all_pred.extend(pq.tolist())
-
-    from sklearn.metrics import confusion_matrix, classification_report
-    all_true = np.array(all_true); all_pred = np.array(all_pred)
-    print(classification_report(
-        all_true, all_pred,
-        target_names=[GESTURE_NAMES[c] for c in CLASSES],
-        digits=3))
-
-    cm = confusion_matrix(all_true, all_pred)
-    print("  Confusion matrix (rows=true, cols=predicted):")
-    cm_rows = [[GESTURE_NAMES[c]] + list(cm[i]) for i,c in enumerate(CLASSES)]
-    print(tabulate(cm_rows,
-                   headers=["True \\ Pred"] + [GESTURE_NAMES[c] for c in CLASSES],
-                   tablefmt="simple"))
-
-    # 7. CSV export
-    with open("fors_emg_results.csv","w",newline="") as f:
+    with open("fors_emg_results_6class.csv","w",newline="") as f:
         w = csv.writer(f)
-        w.writerow(["Architecture","FP32_mean","FP32_std",
+        w.writerow(["Model","FP32_mean","FP32_std",
                     "INT8_mean","INT8_std","Qdrop_pp","Bytes","MACs"])
-        for lbl, r in results.items():
+        for lbl in order:
+            r2 = results[lbl]
             w.writerow([lbl,
-                        round(r['fp32_mean'],6), round(r['fp32_std'],6),
-                        round(r['int8_mean'],6), round(r['int8_std'],6),
-                        round(r['q_drop']*100,4),
-                        r['pb'], r['macs']])
-    print(f"\n  Results saved → fors_emg_results.csv")
+                        round(r2['fp32_mean'],6), round(r2['fp32_std'],6),
+                        round(r2['int8_mean'],6), round(r2['int8_std'],6),
+                        round(r2['q_drop']*100,4),
+                        r2['pb'], r2['macs']])
+    print(f"\n  Results saved → fors_emg_results_6class.csv")
     print(f"  Total runtime : {(time.time()-t0)/60:.1f} min")
     print("=" * 65)
 

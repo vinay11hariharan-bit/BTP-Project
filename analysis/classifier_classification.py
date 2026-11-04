@@ -78,6 +78,9 @@ torch.set_num_threads(1)          # outer joblib parallelism owns the cores
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 BASE_DIR = r"/Users/vinayhariharan/Projects/BTP/NN_model/archive/FORS-EMG Dataset/FORS-EMG Dataset/FORS-EMG"
+if not os.path.isdir(BASE_DIR):   # fall back to the copy of the dataset inside this repository
+    BASE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "archive",
+                            "FORS-EMG Dataset", "FORS-EMG Dataset", "FORS-EMG")
 
 CLASSES = [0, 1, 2, 3]
 GESTURE_FILE_MAP = {0: "Hand_Close", 1: "Hand_Open",

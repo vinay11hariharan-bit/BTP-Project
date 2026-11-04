@@ -15,8 +15,7 @@ The validated pipeline (its own windows and features) runs on the same split, so
 the two are compared subject by subject.
 Prints results only; writes no files.
 
-Run:  python K_4_LDA_Golden_LOSO.py
-      (K_4_LDA_Analysis.py and lda_golden_model.py in the same folder)
+Run:  python golden_model/K_4_LDA_Golden_LOSO.py      (imports K_4_LDA_Analysis from analysis/)
 """
 
 import time
@@ -25,6 +24,11 @@ from scipy.stats import t as student_t, wilcoxon
 from sklearn.metrics import accuracy_score
 from tabulate import tabulate
 from tqdm import tqdm
+
+import sys
+from pathlib import Path
+_ROOT = Path(__file__).resolve().parents[1]
+sys.path[:0] = [str(_ROOT / "analysis"), str(_ROOT / "golden_model"), str(_ROOT / "explorations")]
 
 import K_4_LDA_Analysis as B
 import lda_golden_model as G

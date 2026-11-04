@@ -19,8 +19,7 @@ same split and the same classifier:
 The INT8 LDA on the same x_q (Way 1's input) is printed as the reference.
 Prints results only; writes no files.
 
-Run:  python K_4_HDC_Way1_vs_Way2.py
-      (K_4_LDA_Analysis.py and lda_golden_model.py in the same folder)
+Run:  python explorations/K_4_HDC_Way1_vs_Way2.py      (from the repository root; imports from analysis/ and golden_model/)
 """
 
 import os
@@ -29,6 +28,11 @@ import numpy as np
 from scipy.stats import t as student_t, wilcoxon
 from tabulate import tabulate
 from tqdm import tqdm
+
+import sys
+from pathlib import Path
+_ROOT = Path(__file__).resolve().parents[1]
+sys.path[:0] = [str(_ROOT / "analysis"), str(_ROOT / "golden_model"), str(_ROOT / "explorations")]
 
 import K_4_LDA_Analysis as B
 import lda_golden_model as G
@@ -48,10 +52,7 @@ C = B.N_CHANNELS
 D = G.N_TYPES * C
 K = B.N_CLASSES
 STRIDE = G.SUB_WIN
-DATA_DIR = B.BASE_DIR
-if not os.path.isdir(DATA_DIR):            # fall back to the copy inside the repo
-    DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                            "archive", "FORS-EMG Dataset", "FORS-EMG Dataset", "FORS-EMG")
+DATA_DIR = B.BASE_DIR                      # K_4_LDA_Analysis falls back to the repo's archive/
 
 
 # ─── Random hypervectors ──────────────────────────────────────────────────────
