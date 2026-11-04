@@ -28,7 +28,7 @@ from tqdm import tqdm
 import sys
 from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(_ROOT / "analysis"), str(_ROOT / "golden_model"), str(_ROOT / "explorations")]
+sys.path[:0] = [str(_ROOT / "analysis"), str(_ROOT / "golden_model")]
 
 import K_4_LDA_Analysis as B
 import lda_golden_model as G
