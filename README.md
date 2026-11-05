@@ -1,7 +1,7 @@
 # BTP — Low-Power sEMG Gesture Classifier ASIC
 
 B.Tech project, Department of Electrical Engineering, IIT Bombay (BioNICS group, advisor Prof. Laxmeesha Somappa).
-Team: Vinay Hariharan (lead), Sudhindra, Yash, Digvijay.
+Team: Vinay Hariharan, Sudhindra, Yash, Digvijay.
 
 Surface EMG from 8–24 forearm electrodes is classified into hand/wrist gestures by a fixed-function,
 fully integer digital core: per-channel time-domain features, an integer shift-normaliser, and an
