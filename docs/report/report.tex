@@ -1,45 +1,54 @@
 \documentclass[10pt,twocolumn,a4paper]{article}
-\usepackage[margin=1.8cm,columnsep=0.6cm]{geometry}
-\usepackage{amsmath,amssymb,booktabs,graphicx,xcolor,hyperref,enumitem,caption,float,microtype}
-\usepackage{tikz}
+\usepackage[margin=1.7cm,columnsep=0.6cm]{geometry}
+\usepackage[table]{xcolor}
+\usepackage{amsmath,amssymb,booktabs,graphicx,hyperref,enumitem,caption,subcaption,float,microtype,multirow}
 \usepackage{verbatim}
-\usetikzlibrary{positioning,arrows.meta,fit}
-\hypersetup{colorlinks,linkcolor=black,citecolor=black,urlcolor=blue!50!black}
+\hypersetup{colorlinks,linkcolor=blue!40!black,citecolor=black,urlcolor=blue!50!black}
 \setlist{itemsep=1pt,topsep=2pt,leftmargin=*}
 \captionsetup{font=small,labelfont=bf}
-\renewcommand{\arraystretch}{1.12}
+\renewcommand{\arraystretch}{1.1}
 \newcommand{\pp}{\,pp}
+\definecolor{chosen}{HTML}{FADBD8}
+\newcommand{\hl}{\rowcolor{chosen}}
+
 
 \title{\textbf{A Fully Integer, Subject-Independent sEMG Gesture Classifier ASIC:\\
-Design Decisions, Trade-offs and Verification}}
+Design Decisions, Training Results and Verification}}
 \author{Vinay Hariharan, Sudhindra, Yash, Digvijay\\
 \small Department of Electrical Engineering, IIT Bombay \quad Advisor: Prof.\ Laxmeesha Somappa (BioNICS)\\
 \small B.Tech project report, November 2026}
 \date{}
 
 \begin{document}
+\twocolumn[{%
 \maketitle
+\vspace{-6mm}
+\begin{center}
+\includegraphics[width=\textwidth]{figures/pipeline.pdf}
+\captionof{figure}{The classifier. Surface EMG is filtered and digitised in the electrode pods; the
+chip computes five integer features per channel, normalises them with a shift, and an INT8 LDA with one
+multiplier decides one of four gestures every 98 samples.}\label{fig:pipeline}
+\end{center}
+\vspace{2mm}}]
 
 \begin{abstract}
 We designed and verified a fixed-function digital core that classifies four hand and wrist gestures
 from 8 to 24 surface-EMG electrodes using only integer arithmetic and one $8\times8$ multiplier.
-Every design choice was settled by a measured, subject-independent experiment on the public
-FORS-EMG dataset (leave-one-subject-out, paired statistics). The choice of gesture set was the
-largest single factor (+14.1\pp). Classifier capacity did not matter: an MLP, logistic regression
-and LDA are statistically tied, and INT8 quantisation costs 0.18\pp\ on average. Replacing
-floating-point features with add, compare and shift operations and a shift normaliser costs no
-accuracy (77.79\% vs 77.88\%). The resulting INT8 LDA core is described in synthesisable
-Verilog. A bit-exact golden model reproduces the software accuracy (77.61\% vs 77.83\%, no
-detectable difference), and the RTL matches that golden model bit for bit at every channel count
-from 8 to 24, using at most 850 of the 1015 clock cycles available per sample. We also report the
-classifiers we evaluated and rejected (CNNs and trees).
+Every design choice was settled by a subject-independent experiment on the public FORS-EMG dataset
+(leave-one-subject-out, paired statistics). The gesture set was the largest single factor
+(+14.1\pp). Classifier capacity did not matter: five MLP widths, logistic regression, a linear SVM
+and LDA are statistically tied, and INT8 quantisation costs 0.18\pp\ on average over 28
+comparisons. Replacing the floating-point features with add, compare and shift operations and a
+shift normaliser costs no accuracy. A bit-exact golden model of the chip reaches
+77.61$\pm$4.34\% against 77.83$\pm$4.11\% for the software INT8 LDA (no detectable difference), and
+the Verilog matches that model bit for bit at every channel count from 8 to 24, using at most 850
+of the 1015 clock cycles available per sample.
 \end{abstract}
 
 %=======================================================================
 \section{Introduction}
 Wearable myoelectric control (prostheses, gesture interfaces) needs a classifier that runs
-continuously at microwatt power and works for a person it was never trained on. These two
-requirements drive every decision in this report.
+continuously at very low power and works for a person it was never trained on.
 \begin{itemize}
 \item \textbf{Low power} favours integer arithmetic, few multiplications, small memories and a low
 clock rate (here 1\,MHz).
@@ -47,307 +56,472 @@ clock rate (here 1\,MHz).
 electrode placement and muscle physiology change the signal between people. We therefore report
 only subject-independent accuracy.
 \end{itemize}
-The project went through three phases: choosing the gesture set and classifier
+The work went through three phases: choosing the gesture set and classifier
 (Sections~\ref{sec:gestures}--\ref{sec:quant}), making the front end integer-only
-(Section~\ref{sec:frontend}), designing and verifying the hardware
-(Sections~\ref{sec:hw}--\ref{sec:verif}). Section~\ref{sec:tradeoffs} collects every decision, the
-alternatives and the evidence in one table.
+(Sections~\ref{sec:featsel}--\ref{sec:frontend}), and designing and verifying the hardware
+(Sections~\ref{sec:hw}--\ref{sec:verif}). Section~\ref{sec:tradeoffs} collects every decision and
+its evidence in one table.
 
 %=======================================================================
 \section{Dataset and evaluation protocol}\label{sec:protocol}
 \textbf{Data.} FORS-EMG: 19 subjects, 8 forearm electrodes, 985\,Hz, 12 gestures in 3 forearm
-orientations, 5 trials each; every recording is 8000 samples ($\approx$8.1\,s).
+orientations (rest, supination, pronation), 5 trials each; every recording is 8000 samples
+($\approx$8.1\,s). Figure~\ref{fig:signals} shows one recording of each gesture used on the chip.
 
-\textbf{Signal chain.} A 20--450\,Hz Butterworth band-pass and a 50\,Hz notch ($Q=30$). The
-filter is causal (forward only), because hardware cannot run the zero-phase filter used in the
-first experiments: zero-phase filtering applies $|H|^2$ and uses future samples.
+\textbf{Signal chain.} A 4th-order Butterworth band-pass (20--450\,Hz) and a 50\,Hz notch ($Q=30$),
+run causally as five biquads. The first experiments used zero-phase filtering, which hardware cannot
+run (it needs future samples), so all chip-related results use the causal filter.
+Figure~\ref{fig:spectrum} shows the effect: baseline drift below 20\,Hz and the mains line are
+removed, and the 20--450\,Hz band is kept.
 
 \textbf{Windows.} 200\,ms windows (196--197 samples) with a 100\,ms stride.
 
 \textbf{Split.} Leave-one-subject-out (LOSO): the held-out subject is never seen in training or
-normalisation. Within the training subjects, trial 5 is the validation set and
-trials 1--4 train. Windows are cut \emph{after} the split. An early bug cut windows first; because
-neighbouring windows share half their samples, this leaked validation data into training and
-produced a false 63\% ceiling that did not depend on model capacity.
+normalisation. Within the training subjects, trial 5 is the validation set and trials 1--4 train.
+Windows are cut \emph{after} the split. An early bug cut windows first; because neighbouring
+windows share half their samples, validation data leaked into training and produced a false
+63\% ceiling that did not depend on model capacity.
 
 \textbf{Statistics.} Accuracy is the mean over held-out subjects with a 95\% confidence interval.
-Two methods are compared per subject (paired): mean difference, 95\% CI of the difference, and the
-Wilcoxon signed-rank test. A difference is called real only if its CI excludes zero.
+Two methods are compared per subject (paired): mean difference, its 95\% CI, and the Wilcoxon
+signed-rank test (paired $t$-test in the earliest runs). A difference is called real only if its CI
+excludes zero.
 
-The repository copy of the dataset is missing Subject~1, so runs made for this report use 18
-subjects; runs made on the full dataset use 19. Every table states which.
+The repository copy of the dataset lacks Subject~1, so runs made for this report use 18 subjects;
+runs made on the full dataset use 19. Every table states which.
+
+\begin{figure*}[t]\centering
+\includegraphics[width=\textwidth]{figures/signals.pdf}
+\caption{One recording per gesture (subject~2, rest orientation, trial~1). Top: raw channel~1. Bottom:
+all 8 channels after the causal filter, offset for clarity. The gestures differ in which channels are
+active, which is what the per-channel amplitude features capture.}\label{fig:signals}
+\end{figure*}
+
+\begin{figure}[t]\centering
+\includegraphics[width=\linewidth]{figures/spectrum.pdf}
+\caption{Left: power spectrum before and after the causal filter (subject~2, all recordings).
+Right: magnitude response of the filter.}\label{fig:spectrum}
+\end{figure}
 
 %=======================================================================
 \section{Gesture set}\label{sec:gestures}
-The first set, \{Hand Close, Hand Open, Index, Index Little\}, stopped at about 65\% whatever the
-model (Table~\ref{tab:gestures}). Its confusion matrix showed that Index $\leftrightarrow$ Index
-Little alone caused about 40\% of all errors. These two finger movements recruit overlapping deep
-flexor compartments, which 8 surface electrodes cannot separate.
+The first set, \{Hand Close, Hand Open, Index, Index Little\} (Set A), stopped at about 65\% whatever
+the model. Its confusion matrix showed that Index $\leftrightarrow$ Index Little alone caused about
+40\% of all errors: the two finger movements recruit overlapping deep flexor compartments, which 8
+surface electrodes cannot separate.
 
-\textbf{Decision.} Use \{Hand Close, Hand Open, Wrist Flexion, Wrist Extension\}: gross hand and
-wrist movements driven by distinct, superficial muscles. This gained \textbf{+14.1\pp} (paired
-$t$-test $p=3.8\times10^{-9}$), more than any later model or hardware choice. Larger vocabularies
-cost accuracy: 69.0\% for the best 6 gestures and 48.8\% for all 12 (Fig.~\ref{fig:gestures}). The
-remaining dominant confusion, Hand Open $\leftrightarrow$ Wrist Extension, comes from shared
-extensor-digitorum activity.
+\textbf{Decision.} Use \{Hand Close, Hand Open, Wrist Flexion, Wrist Extension\} (Set B): gross
+movements driven by distinct, superficial muscles. This gained \textbf{+14.1\pp} (paired $t$-test
+$p=3.8\times10^{-9}$, 95\% CI $[+11.3,+16.9]$), more than any later model or hardware choice
+(Fig.~\ref{fig:gestures}).
+
+Larger vocabularies cost accuracy (Table~\ref{tab:vocab}). The best 6 of the 12 gestures (Set D)
+were chosen by ranking all $\binom{12}{6}=924$ subsets by their worst pairwise confusion in the
+12-class confusion matrices. That ranking predicted 66.4\% (band 65--75\%) before training; the
+measured 69.0\% fell inside it, so existing confusion data can rank vocabularies without retraining.
+In Set D, Right Angle caused 44.5\% of all errors (F1 0.583 against 0.63--0.78 for the others). In
+Set C (all 12), the MLP and logistic regression agreed on 9 of their 10 most confused pairs, so the
+errors come from the signals, not from the model.
+
+\begin{figure}[t]\centering
+\includegraphics[width=0.92\linewidth]{figures/gesture_sets.pdf}
+\caption{INT8 LOSO accuracy for each vocabulary (19 subjects); black bars: chance.}\label{fig:gestures}
+\end{figure}
 
 \begin{table}[t]\centering\small
-\caption{INT8 LOSO accuracy by gesture vocabulary (19 subjects; best tied model).}\label{tab:gestures}
+\caption{Training results by vocabulary (INT8 and FP32, LOSO, 19 subjects).}\label{tab:vocab}
 \resizebox{\linewidth}{!}{%
-\begin{tabular}{lccc}\toprule
-Gesture set & Accuracy & Chance & $\times$ chance\\\midrule
-A: 4 incl.\ Index, Index Little & 65.3\% & 25\% & 2.6\\
-\textbf{B: 4 selected (final)} & \textbf{79.4\%} & 25\% & 3.2\\
-D: best 6 of 12 & 69.0\% & 16.7\% & 4.1\\
-C: all 12 & 48.8\% & 8.3\% & 5.9\\\bottomrule
+\begin{tabular}{llrrrrr}\toprule
+Set & Model & FP32 \% & INT8 \% & Q-drop & MACs & Bytes\\\midrule
+\multirow{1}{*}{B (4)} & MLP 64-16-4 & 79.69 & 79.38 & 0.32 & 1088 & 1168\\
+\multirow{2}{*}{D (6)} & MLP 64-16-6 & 69.23 & 69.21 & 0.02 & 1120 & 1208\\
+ & Logistic reg. & 68.95 & 68.74 & 0.21 & 384 & 408\\
+\multirow{2}{*}{C (12)} & MLP 64-16-12 & 48.99 & 48.37 & 0.63 & 1216 & 1328\\
+ & Logistic reg. & 49.71 & 49.28 & 0.43 & 768 & 816\\\bottomrule
+\multicolumn{7}{l}{\footnotesize Set B: $\pm$8.20 (std over subjects). D tied $p=0.49$; C tied $p=0.197$.}
 \end{tabular}}
 \end{table}
 
-\begin{figure}[t]\centering
-\includegraphics[width=\linewidth]{figures/gesture_sets.pdf}
-\caption{Accuracy for each gesture vocabulary; black ticks mark chance level.}\label{fig:gestures}
-\end{figure}
-
-The 6-gesture subset was chosen by ranking all $\binom{12}{6}=924$ subsets by their worst pairwise
-confusion, using the 12-class confusion matrices. The predicted accuracy (66.4\%, band 65--75\%)
-contained the measured 69.0\%, so existing confusion data can rank vocabularies without retraining.
+\begin{table}[t]\centering\small
+\caption{Per-class F1, Set B, MLP 64-16-4.}\label{tab:f1}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{cccc}\toprule
+Hand Close & Hand Open & Wrist Flexion & Wrist Extension\\\midrule
+0.838 & 0.695 & 0.883 & 0.749\\\bottomrule
+\end{tabular}}
+\end{table}
 
 %=======================================================================
 \section{Classifier}\label{sec:classifier}
-Eight classifiers were trained under one protocol on Gesture Set B, using 64 float features
-(8 types $\times$ 8 channels). The memory budget was 10\,KB (Table~\ref{tab:clf}, Fig.~\ref{fig:clf}).
+\textbf{Width sweep (Set A).} Five MLP widths, from a linear layer to 64-128-4, were trained under the
+same protocol three times, once per bug fix of the pipeline. Every time they were statistically
+indistinguishable: the spread between them (1.3\pp) was smaller than the $\pm$5.9\pp\ CI of any one
+of them, and the ranking changed between runs (Table~\ref{tab:mlp}, Fig.~\ref{fig:mlp}).
 
 \begin{table}[t]\centering\small
-\caption{Classifiers on Gesture Set B (INT8, LOSO, 19 subjects). ``Tied'': paired test against the MLP not significant.}\label{tab:clf}
+\caption{MLP width sweep, Set A (final pipeline, 19 subjects).}\label{tab:mlp}
 \resizebox{\linewidth}{!}{%
-\begin{tabular}{lrrrl}\toprule
-Model & INT8 \% & MACs & Bytes & vs MLP\\\midrule
-MLP 64-16-4 & 79.57 & 1088 & 1168 & --\\
-Hist.\ grad.\ boosting & 79.26 & 0 & 19\,200 & tied, $>$10\,KB\\
-Logistic regression & 79.19 & 256 & 272 & tied\\
-Linear SVM & 78.30 & 256 & 272 & tied\\
-LDA & 77.87 & 256 & 272 & tied ($p=0.09$)\\
-Random forest & 77.43 & 0 & 53\,145 & worse, $>$10\,KB\\
-Extra trees & 76.04 & 0 & 38\,015 & worse, $>$10\,KB\\
-Decision tree & 73.17 & 0 & 5055 & worse\\\bottomrule
+\begin{tabular}{lrrrrr}\toprule
+Architecture & FP32 \% & INT8 \% & Q-drop & Bytes & MACs\\\midrule
+64-4 (linear) & 65.17 & 65.28 & $-0.12$ & 272 & 256\\
+64-16-4 & 63.71 & 63.63 & 0.07 & 1168 & 1088\\
+64-32-4 & 63.89 & 63.93 & $-0.04$ & 2320 & 2176\\
+64-64-4 & 64.80 & 64.87 & $-0.07$ & 4624 & 4352\\
+64-128-4 & 64.22 & 64.02 & 0.21 & 9232 & 8704\\\bottomrule
 \end{tabular}}
 \end{table}
 
 \begin{figure}[t]\centering
-\includegraphics[width=\linewidth]{figures/classifiers.pdf}
-\caption{Accuracy against model memory. Grey: over the 10\,KB budget. Red: the chosen LDA.}\label{fig:clf}
+\includegraphics[width=0.92\linewidth]{figures/mlp_widths.pdf}
+\caption{MLP width against memory, Set A. A 34$\times$ larger model is not more accurate.}\label{fig:mlp}
 \end{figure}
 
-\textbf{Finding: capacity is not the bottleneck.} Five MLP widths (linear up to 64-128-4) were
-statistically indistinguishable on Set A. Logistic regression tied the MLP on the 4-, 6- and
-12-gesture sets. The limit is the information in surface EMG, not the model.
+\textbf{Eight classifiers (Set B).} Using 64 float features (8 types $\times$ 8 channels) and a 10\,KB
+memory budget (Table~\ref{tab:clf}, Fig.~\ref{fig:clf}):
+\begin{itemize}
+\item the MLP, logistic regression, linear SVM and LDA are statistically tied;
+\item gradient boosting ties too, but needs 19\,KB;
+\item random forest and extra trees are worse and over budget; the only tree inside the budget, a
+single decision tree, is 6.4\pp\ worse.
+\end{itemize}
 
-\textbf{Decision: LDA for the chip.} Logistic regression had the best point estimate among the
-cheap models. We still chose LDA, for three reasons that matter in hardware:
+\begin{table}[t]\centering\small
+\caption{Eight classifiers, Set B (LOSO, 19 subjects). ``vs MLP'': paired test.}\label{tab:clf}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{lrrrrrl}\toprule
+Model & FP32 & INT8 & Q-drop & MACs & Bytes & vs MLP\\\midrule
+MLP 64-16-4 & 79.65 & 79.57 & 0.08 & 1088 & 1168 & --\\
+Hist.\ grad.\ boost & 79.63 & 79.26 & 0.37 & 0 & 19\,200 & tied ($p$=.78)\\
+Logistic reg. & 79.33 & 79.19 & 0.14 & 256 & 272 & tied ($p$=.44)\\
+Linear SVM & 79.31 & 78.30 & 1.01 & 256 & 272 & tied ($p$=.29)\\
+\hl LDA & 77.91 & 77.87 & 0.04 & 256 & 272 & tied ($p$=.09)\\
+Random forest & 77.84 & 77.43 & 0.41 & 0 & 53\,145 & worse ($p$=.046)\\
+Extra trees & 76.29 & 76.04 & 0.25 & 0 & 38\,015 & worse ($p$=.0009)\\
+Decision tree & 73.69 & 73.17 & 0.52 & 0 & 5055 & worse ($p$=.0002)\\\bottomrule
+\end{tabular}}
+\end{table}
+
+\begin{figure*}[t]\centering
+\includegraphics[width=\textwidth]{figures/classifiers.pdf}
+\caption{Left: INT8 accuracy (bar) and FP32 accuracy (tick) of the eight classifiers. Right: accuracy
+against memory; grey models break the 10\,KB budget, red is the LDA used on the chip.}\label{fig:clf}
+\end{figure*}
+
+\textbf{Finding: capacity is not the bottleneck.} The limit is the information in 8 surface
+channels, not the model; this held at 4, 6 and 12 classes.
+
+\textbf{Decision: LDA for the chip.} Logistic regression had the best point estimate among the cheap
+models. We still chose LDA, because:
 \begin{enumerate}
 \item its training is closed-form (class means and one shared covariance), with no iterative
-optimiser, so it can be retrained or adapted with a few matrix operations;
-\item its weights are stored, not hard-wired, so a model retrained on the host is loaded through
-the configuration port without new silicon;
+optimiser, so retraining for a new electrode layout is a few matrix operations;
+\item its weights are stored, not hard-wired, so a retrained model is loaded through the
+configuration port without new silicon;
 \item its scores have a probabilistic meaning (log-likelihoods up to a shared constant).
 \end{enumerate}
-Its cost is 1.7\pp\ against the MLP, within the tie ($p=0.09$). Trees were excluded: the accurate
-ones break the memory budget, and the only one inside it is significantly worse.
+It costs 1.7\pp\ against the MLP, inside the tie ($p=0.09$).
 
-\textbf{CNNs and a programmable accelerator.}
-Yash and Digvijay trained raw-signal CNNs (depthwise-separable and two-branch designs, with batch
-normalisation folded into the weights and INT8 calibration) and co-designed an 8-bit ISA for a
-soft-programmable MAC accelerator. In October 2026 the hardware scope was fixed to the LDA:
-\begin{itemize}
-\item the classifier comparison showed no accuracy gain from capacity on hand-crafted features;
-\item a CNN needs many more MACs and weights;
-\item a programmable controller adds control logic and verification effort for a model the
-4-gesture task does not need.
-\end{itemize}
-The CNN scripts remain in \texttt{analysis/} for comparison.
+\textbf{CNNs and a programmable accelerator.} Yash and Digvijay trained raw-signal CNNs
+(depthwise-separable and two-branch designs, batch normalisation folded into the weights, INT8) and
+co-designed an 8-bit ISA for a programmable MAC accelerator. In October 2026 the scope was fixed to
+the LDA: capacity gave no gain on hand-crafted features, a CNN needs many more MACs and weights, and
+a programmable controller adds control logic and verification effort the 4-gesture task does not
+need.
 
 %=======================================================================
 \section{INT8 quantisation}\label{sec:quant}
-Weights and activations are symmetric per-tensor INT8, with biases in INT32 on the same scale.
-Across 28 FP32-vs-INT8 comparisons (all models and gesture sets), the mean accuracy loss was
-\textbf{0.18\pp} (median 0.11, maximum 1.01 for the linear SVM). Twenty-five of the 28 losses were
-under 0.5\pp. A requantisation bug (an undefined shift when the multiplier exceeds 1) would have
-cost over 50\pp; a synthetic unit test caught it before any result was reported.
+Weights and activations are symmetric per-tensor INT8 with the scale set at the 99.9th percentile of
+$|t|$; biases are INT32 on the scale $s_W s_x$, so they add straight into the accumulator. All
+scales come from the training subjects only.
 
-For a classifier that only needs $\arg\max$, requantisation is unnecessary. If every class
-score shares one positive scale $s>0$, then
+\textbf{Result.} Over 28 FP32-vs-INT8 comparisons (every model and gesture set), the loss was
+0.18\pp\ on average (median 0.11, standard deviation 0.25, worst 1.01 for the linear SVM, best
+$-0.16$). 25 of 28 losses were under 0.5\pp\ and 27 of 28 under 1\pp\ (Fig.~\ref{fig:qdrop}). The
+linear SVM is the outlier because its hinge loss produces larger weights near the boundary.
+
+A requantisation bug (a shift of $\lceil-\log_2 M\rceil$, undefined when the multiplier $M>1$) would
+have cost over 50\pp; a synthetic unit test caught it before any result was reported. The fixed
+form is $y=(z\,M_0+2^{30})\gg31$ with $M_0=\operatorname{round}(M\,2^{31})$, valid for any $M>0$.
+
+\textbf{No requantisation on the chip.} The LDA only needs $\arg\max$. If every class score shares
+one positive scale $s>0$, then
 \[
 \arg\max_k s\,S_k=\arg\max_k S_k ,
 \]
-so the chip keeps one INT32 accumulator per class and never rescales. This requires a single
-weight scale for all classes.
+so the chip keeps one INT32 accumulator per class and never rescales. This requires one weight scale
+for all classes.
+
+\begin{figure*}[t]\centering
+\includegraphics[width=\textwidth]{figures/qdrop.pdf}
+\caption{INT8 against FP32 for the 18 results listed in Tables~\ref{tab:vocab}--\ref{tab:clf}
+(left) and the distribution of their losses (right). INT8 is lossless for practical purposes.}\label{fig:qdrop}
+\end{figure*}
+
+%=======================================================================
+\section{Feature-type selection}\label{sec:featsel}
+The 64 float features used 8 types per channel. To cut the input size we selected types by nested
+LOSO on the INT8 LDA (18 subjects): for each held-out subject, all 127 subsets of 7 candidate types
+were scored by an inner LOSO on the other 17, and the smallest subset within one paired standard
+error of the best was kept. IEMG was excluded beforehand, since IEMG $=L\cdot$MAV gives an identical
+LDA.
+
+\textbf{Redundancy.} MAV, RMS, WL and VAR are almost the same signal (Spearman $|\rho|\ge0.977$,
+Fig.~\ref{fig:featsel}); ZC, SSC and WAMP carry different information. WAMP was saturated (98\% of
+sample differences exceed its threshold).
+
+\textbf{Result.} \{MAV, WL, ZC, SSC, VAR\} was selected overall. MAV, ZC and VAR were chosen in all
+18 folds, WL in 17 and SSC in 14. Accuracy saturates at $k=5$ (Fig.~\ref{fig:featsel}). The
+selected set reaches \textbf{77.08$\pm$4.97\%} against 77.31$\pm$5.02\% with all 8 types
+($\Delta=-0.23\pm0.42$\pp, $p=0.20$, non-inferior at a $-1$\pp\ margin), with 40 inputs instead of
+64: 176 instead of 272 bytes and 160 instead of 256 MACs. Table~\ref{tab:featsel} lists every fold.
+
+\begin{figure*}[t]\centering
+\includegraphics[width=\textwidth]{figures/feature_selection.pdf}
+\caption{Feature-type selection. Left: rank correlation between types (mean over channels). Middle:
+best inner-LOSO accuracy for each number of types. Right: how often each type was selected over the
+18 outer folds.}\label{fig:featsel}
+\end{figure*}
+
+\begin{table}[t]\centering\small
+\caption{Nested LOSO feature selection, per held-out subject (INT8 \%).}\label{tab:featsel}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{llrrr}\toprule
+Test & Selected types & Inner & Selected & All 8\\\midrule
+S02 & MAV WL ZC SSC VAR & 77.10 & 68.90 & 68.92\\
+S03 & MAV WL ZC SSC VAR & 78.87 & 65.00 & 64.94\\
+S04 & MAV WL ZC SSC VAR & 76.64 & 76.77 & 75.17\\
+S05 & MAV WL ZC VAR & 77.61 & 67.75 & 68.75\\
+S06 & MAV WL ZC SSC VAR & 76.29 & 87.33 & 87.98\\
+S07 & MAV WL ZC SSC VAR & 77.17 & 71.12 & 70.46\\
+S08 & MAV WL ZC SSC VAR & 76.61 & 81.12 & 81.50\\
+S09 & MAV WL ZC VAR & 76.32 & 80.12 & 80.40\\
+S10 & MAV WL ZC SSC VAR & 76.65 & 81.71 & 81.75\\
+S11 & MAV WL ZC SSC VAR & 76.43 & 85.69 & 85.73\\
+S12 & MAV WL ZC SSC VAR & 76.51 & 82.54 & 83.06\\
+S13 & MAV WL ZC SSC VAR & 78.00 & 63.08 & 63.33\\
+S14 & MAV WL ZC SSC VAR & 76.57 & 84.10 & 84.31\\
+S15 & MAV WL ZC VAR & 78.27 & 57.52 & 57.04\\
+S16 & MAV WL ZC VAR & 76.93 & 70.75 & 72.02\\
+S17 & MAV WL ZC SSC VAR & 76.22 & 91.79 & 91.94\\
+S18 & MAV RMS ZC SSC VAR & 76.24 & 80.81 & 83.27\\
+S19 & MAV WL ZC SSC VAR & 76.23 & 91.40 & 91.02\\\midrule
+Mean & & & \textbf{77.08} & 77.31\\\bottomrule
+\end{tabular}}
+\end{table}
 
 %=======================================================================
 \section{Integer front end}\label{sec:frontend}
-The float features (MAV, WL, ZC, SSC, VAR) need division, square roots and floating-point
-thresholds. We rebuilt them from operations an ASIC does cheaply: add, subtract, absolute value,
-compare, shift, and a leading-one detector.
+The selected float features need division, square roots and floating-point thresholds. We rebuilt
+them from add, subtract, absolute value, compare, shift and a leading-one detector.
 \begin{itemize}
-\item \textbf{SABS} $=\sum|x|$ replaces MAV. The $1/N$ factor is absorbed by normalisation, since
-LDA is invariant to rescaling individual features.
+\item \textbf{SABS} $=\sum|x|$ replaces MAV. The $1/N$ is absorbed by normalisation, since LDA is
+invariant to rescaling one feature.
 \item \textbf{WL} $=\sum|x_n-x_{n-1}|$.
-\item \textbf{ZC}: sign-bit XOR of consecutive samples, with no amplitude dead-band (\texttt{ZC\_NODB}).
+\item \textbf{ZC}: sign-bit XOR of consecutive samples, with no amplitude dead-band.
 \item \textbf{SSC}: strict sign change of consecutive differences; only the sign of the previous
 difference is stored, so each channel's history needs 10 bits.
-\item \textbf{POW}: $\sum x^2$ with Mitchell's one-step approximation of the square,
+\item \textbf{POW} replaces VAR: $\sum x^2$ with Mitchell's one-step square,
 \[
 a^2\approx a\cdot2^{p+1}-2^{2p},\qquad p=\lfloor\log_2 a\rfloor ,
 \]
-which is one leading-one detector, two shifts and one subtraction, never overestimates, and has
-correlation $r=0.9999$ with the exact sum.
+one leading-one detector, two shifts and one subtraction. It never overestimates
+(Fig.~\ref{fig:mitchell}); the summed feature has correlation $r=0.9999$ with the exact sum.
 \end{itemize}
-Log-amplitude features were rejected because a logarithm is expensive in hardware.
+
+\begin{figure*}[t]\centering
+\includegraphics[width=\textwidth]{figures/mitchell.pdf}
+\caption{Mitchell-1 square of an 8-bit magnitude. The per-sample error is up to 25\%, but it is a
+smooth, monotone distortion, and the window sum stays almost perfectly correlated with
+$\sum x^2$.}\label{fig:mitchell}
+\end{figure*}
 
 \textbf{Normaliser.} Z-scoring and float input quantisation are replaced by
 \[
 q_f=\operatorname{clip}\!\big(((x_f-\mu_f)+2^{k_f-1})\gg k_f,\;-128,\;127\big),
 \]
-with integer $\mu_f$ and $k_f$ calibrated on the training subjects.
+with integer $\mu_f$ (rounded training mean) and the smallest $k_f\ge1$ that never clips on the
+training subjects. Figure~\ref{fig:norm} shows the resulting INT8 inputs on held-out subjects and the
+shifts of one fold: count features need $k=1$, amplitude features 4--6, power 7--12.
 
-\textbf{Result.} Six integer variants (H1--H6) were compared against the float reference on the
-same folds. Table~\ref{tab:hw} lists the results (18 subjects). With the integer normaliser, every variant
-that keeps a power feature is non-inferior to the float reference (margin $-1$\pp). Dropping the
-power term (H5) loses about 2\pp, so a power feature is required. Mitchell-1 squares (H3, H6) cost
-nothing measurable against exact squares.
+\begin{figure*}[t]\centering
+\includegraphics[width=\textwidth]{figures/normaliser.pdf}
+\caption{Left: distribution of $x_q$ over all held-out windows (log scale). Right: $k_f$ for each
+feature and channel in one fold.}\label{fig:norm}
+\end{figure*}
 
-\textbf{Decision}: H6, the cheapest variant, with the integer normaliser. On 19 subjects this
-fully integer front end gives 77.79$\pm$4.39\% against 77.88\% for the float pipeline.
+\textbf{Result.} Six integer variants were trained against the float reference R on the same folds
+(Table~\ref{tab:hw}, Fig.~\ref{fig:hw}). Feature fidelity on all windows: Mitchell-1 POW $r=0.9999$
+with the exact sum, Mitchell-2 $r=1$, $(\sum|x|)^2$ $r=0.994$, ZC without dead-band $r=0.9987$ with
+the float ZC, SABS $r=1$ with MAV.
+\begin{itemize}
+\item every variant that keeps a power feature is non-inferior to R (margin $-1$\pp);
+\item dropping power (H5) loses about 2\pp\ and fails, so a power feature is required;
+\item the shift normaliser costs nothing against the standard one (all six pass).
+\end{itemize}
+\textbf{Decision}: H6, the cheapest variant, with the shift normaliser. On 19 subjects this fully
+integer front end gives 77.79$\pm$4.39\% against 77.88\% for the float pipeline.
 
 \begin{table}[t]\centering\small
-\caption{Integer feature sets, INT8 LDA, LOSO (18 subjects). $\Delta$: paired difference to R with the shift normaliser, 95\% CI.}\label{tab:hw}
+\caption{Integer feature sets, INT8 LDA, LOSO (18 subjects). $\Delta$: paired difference to R
+(standard normaliser) with the shift normaliser, 95\% CI.}\label{tab:hw}
 \resizebox{\linewidth}{!}{%
-\begin{tabular}{llcc}\toprule
- & Power / ZC variant & Shift norm.\ \% & $\Delta$ vs R (pp)\\\midrule
-R & float reference & 77.45 (std) & --\\
-H1 & exact $\sum x^2$ & 77.63 & $+0.19$ $[-0.36,+0.73]$\\
-H2 & Mitchell-2 & 77.56 & $+0.11$ $[-0.41,+0.63]$\\
-H3 & Mitchell-1 & 77.39 & $-0.05$ $[-0.57,+0.47]$\\
-H4 & $(\sum|x|)^2$ & 77.14 & $-0.31$ $[-0.88,+0.27]$\\
-H5 & no power term & 75.54 & $-1.91$ $[-2.94,-0.87]$\\
-\textbf{H6} & \textbf{Mitchell-1, ZC no dead-band} & \textbf{77.39} & $-0.05$ $[-0.59,+0.48]$\\\bottomrule
+\begin{tabular}{llcccc}\toprule
+ & Power / ZC & Train & Std norm. & Shift norm. & $\Delta$ vs R (pp)\\\midrule
+R & float reference & 81.56 & 77.45 & -- & --\\
+H1 & exact $\sum x^2$ & 81.51 & 77.33 & 77.63 & $+0.19\,[-0.36,+0.73]$\\
+H2 & Mitchell-2 & 81.52 & 77.29 & 77.56 & $+0.11\,[-0.41,+0.63]$\\
+H3 & Mitchell-1 & 81.50 & 77.26 & 77.39 & $-0.05\,[-0.57,+0.47]$\\
+H4 & $(\sum|x|)^2$ & 81.34 & 77.10 & 77.14 & $-0.31\,[-0.88,+0.27]$\\
+H5 & no power & 79.41 & 75.38 & 75.54 & $-1.91\,[-2.94,-0.87]$\\
+\hl H6 & Mitchell-1, ZC no db & 81.51 & 77.29 & 77.39 & $-0.05\,[-0.59,+0.48]$\\\bottomrule
 \end{tabular}}
 \end{table}
+
+\begin{figure*}[t]\centering
+\includegraphics[width=\textwidth]{figures/hw_variants.pdf}
+\caption{Left: paired difference of each integer variant to the float reference (shift normaliser,
+95\% CI); the dashed line is the non-inferiority margin. Right: per-subject difference for the chosen
+H6 and for H5, which drops the power feature.}\label{fig:hw}
+\end{figure*}
 
 %=======================================================================
 \section{Hardware architecture}\label{sec:hw}
 \subsection{System partition}
-The question was how to support 8, 12, 16 or 24 electrodes. We considered three options: several
-compute boards exchanging partial LDA scores (exact, since the score is a sum over features),
-master/slave boards sharing state, or one compute core with pluggable acquisition pods.
-A compute-budget analysis settled it. At 1\,MHz, features take about 25 cycles per channel per
-sample, so one core handles up to 40 channels within the 1000-cycle sample period, and the LDA
+We considered three ways to support 8 to 24 electrodes: several compute boards exchanging partial
+LDA scores (exact, since the score is a sum over features), master/slave boards sharing state, or one
+compute core with pluggable acquisition pods. At 1\,MHz the features take a few cycles per channel
+per sample, so one core handles up to 40 channels within the 1000-cycle sample period, and the LDA
 needs $6(D+1)$ cycles per decision. Distributing the computation saves nothing and adds
 synchronisation. \textbf{Decision}: one compute core plus 1--3 daisy-chained 8-channel ADC pods,
-with the channel count set by one register. Electrodes stay close to the muscle (short leads,
-less mains pickup), while all digital work stays on one chip.
+with the channel count set by one register (Fig.~\ref{fig:arch}).
+
+\begin{figure*}[t]\centering
+\includegraphics[width=\textwidth]{figures/architecture.pdf}
+\caption{Chip architecture with the RTL module names. Orange: 8\,MHz ADC-interface domain. Green:
+1\,MHz datapath. Only the frame event crosses between the two.}\label{fig:arch}
+\end{figure*}
 
 \subsection{Datapath}
-The datapath has three stages, all on \texttt{clk\_sys} = 1\,MHz (Fig.~\ref{fig:arch}).
 \begin{enumerate}
 \item \textbf{Stage 1, features} (\texttt{emg\_feat\_accum}). For every frame of $C$ samples, a
-two-stage pipeline reads the channel's history and current bank word from RAM, computes the five
-features combinationally and writes the updated sums back: $C$ cycles per sample. Two ping-pong
-banks of 98 samples give the 196-sample window with a 98-sample stride and a single write
-pointer; a window is bank 0 + bank 1.
-\item \textbf{Stage 2, normaliser} (\texttt{emg\_shift\_norm}). After every 98th sample, for each
-feature it adds the two bank fields, subtracts $\mu_f$, rounds, shifts by $k_f$ and clips:
-$D+2$ cycles, with a 24-bit signed datapath derived from the field widths.
-\item \textbf{Stage 3, LDA} (\texttt{emg\_lda\_mac}). One signed $8\times8$ multiplier and an
-INT32 accumulator. Per class, it loads the bias, then performs $D$ MACs, with one weight-address
-counter for all classes (so no $\text{class}\times D$ multiplication). A streaming argmax with
-strict $>$ (ties keep the lower class) replaces a comparator tree. Total $6(D+1)+2$ cycles; unused
-class slots get bias $-2^{31}$.
+two-stage pipeline reads the channel's history and bank word from RAM, computes the five features
+combinationally and writes the sums back: $C$ cycles per sample. Two ping-pong banks of 98 samples
+give the 196-sample window with a 98-sample stride and a single write pointer
+(Fig.~\ref{fig:banks}).
+\item \textbf{Stage 2, normaliser} (\texttt{emg\_shift\_norm}). After every 98th sample it adds the two
+bank fields, subtracts $\mu_f$, rounds, shifts by $k_f$ and clips: $D+2$ cycles, 24-bit signed
+datapath.
+\item \textbf{Stage 3, LDA} (\texttt{emg\_lda\_mac}). One signed $8\times8$ multiplier and an INT32
+accumulator. Per class it loads the bias, then performs $D$ MACs, with one weight-address counter
+for all classes. A streaming argmax with strict $>$ (ties keep the lower class) replaces a
+comparator tree. Total $6(D+1)+2$ cycles; unused class slots get bias $-2^{31}$.
 \end{enumerate}
 
-\begin{figure}[t]\centering\footnotesize
-\begin{tikzpicture}[node distance=3mm and 4mm, b/.style={draw,rounded corners=2pt,align=center,minimum height=7mm,inner sep=2pt,fill=#1}, b/.default=white, a/.style={-Latex}]
-\node[b=gray!15] (adc) {ADC pods\\1--3$\times$8 ch};
-\node[b=orange!15, right=of adc] (spi) {SPI ctrl\\8\,MHz};
-\node[b=orange!15, below=of spi] (cdc) {toggle\\sync};
-\node[b=teal!15, right=of spi] (s1) {Stage 1\\features};
-\node[b=teal!15, below=of s1] (s2) {Stage 2\\$(x-\mu)\gg k$};
-\node[b=teal!15, below=of s2] (s3) {Stage 3\\1 MAC, argmax};
-\node[b=gray!15, left=of s3] (cfg) {cfg regs\\$\mu,k,W,b$};
-\node[b=gray!15, right=6mm of s2] (out) {class\\out};
-\draw[a] (adc)--(spi); \draw[a] (spi)--node[above]{\tiny rx} (s1); \draw[a] (spi)--(cdc); \draw[a] (cdc)--(s1);
-\draw[a] (s1)--(s2); \draw[a] (s2)--node[right]{\tiny $x_q$} (s3); \draw[a] (cfg)--(s3); \draw[a] (cfg.north)|-(s2.west);
-\draw[a] (s3.east)-|(out.south);
-\end{tikzpicture}
-\caption{Chip partition. Orange: 8\,MHz ADC domain. Teal: the 1\,MHz datapath.}\label{fig:arch}
-\end{figure}
+\begin{figure*}[t]\centering
+\includegraphics[width=\textwidth]{figures/banks.pdf}
+\caption{Windowing with two banks. Each bank accumulates 98 samples; a window is the sum of the last
+two banks, so each new bank completes a window and triggers one decision.}\label{fig:banks}
+\end{figure*}
 
 \subsection{Clocking, crossing and reset}
 The ADC interface runs on an 8\,MHz \texttt{clk\_spi}. It generates CONVST every 8120 cycles
 (985\,Hz), detects the fall of DRDY through a 2-flip-flop synchroniser, and reads $8C$ bits at
 4\,MHz. Only one event crosses into the core: a frame toggle, through a 2-flip-flop toggle
-synchroniser. The data (\texttt{rx\_flat}) crosses unsynchronised, because it is stable for about
-1\,ms around the event; in static timing analysis it is declared a multicycle path. Each domain has
-its own reset synchroniser (asynchronous assert, synchronous release). Constants and settings are
-loaded through one write port into writable memories, not ROM, because every channel count and
-electrode layout needs its own trained model.
+synchroniser. The data crosses unsynchronised, because it is stable for about 1\,ms around the
+event; in static timing analysis it is a multicycle path. Each domain has its own reset
+synchroniser (asynchronous assert, synchronous release).
 
-\subsection{Timing budget}
+\subsection{Timing and memory}
 Stage 1 costs $C$ cycles on every sample. Stages 2 and 3 run once per 98 samples, and their measured
-cost grows by 35 cycles per channel, from 290 to 850 (Fig.~\ref{fig:cycles}). Even at 24 channels,
-everything finishes within one 1015-cycle sample period. A single multiplier therefore suffices,
-and parallel MACs would buy nothing.
+cost grows by 35 cycles per channel, from 290 to 850 (Fig.~\ref{fig:cycles}). Even at 24 channels
+everything finishes within one 1015-cycle sample period, so one multiplier suffices.
 
-\begin{figure}[t]\centering
-\includegraphics[width=\linewidth]{figures/cycles.pdf}
-\caption{Cycle budget against channel count (RTL simulation, $\texttt{clk\_sys}=1$\,MHz).}\label{fig:cycles}
-\end{figure}
+All constants live in writable memories, not ROM, because every channel count and electrode layout
+needs its own model. The total is 13.5\,kbit, sized for 24 channels and 6 classes; every memory has
+a 1-cycle synchronous read, so the RTL maps to SRAM macros or to flip-flops unchanged.
 
-\subsection{Memory}
-\begin{itemize}
-\item feature history: $24\times10$ bits;
-\item feature banks: $2\times24\times64$ bits;
-\item $x_q$: $120\times8$ bits;
-\item normaliser constants: $120\times27$ bits;
-\item weights: $720\times8$ bits;
-\item biases: $6\times32$ bits.
-\end{itemize}
-The total is about 13.3\,kbit, sized for the worst case of 24 channels and 6 classes. Every
-memory has a 1-cycle synchronous read, so the RTL maps to SRAM macros or to flip-flops unchanged.
+\begin{figure*}[t]\centering
+\includegraphics[width=\textwidth]{figures/cycles.pdf}
+\caption{Left: Stage 2 + 3 cycles per decision, formula (bars) and RTL simulation (dots). Right: memory
+by block.}\label{fig:cycles}
+\end{figure*}
 
 %=======================================================================
 \section{Verification}\label{sec:verif}
-\textbf{Golden model.} \texttt{lda\_golden\_model.py} reproduces every integer of Stages 1--3 in
-two forms: a sample-by-sample model that mirrors the RTL's counters, and a vectorised model used
-for training. The two are cross-checked on every run. Training uses the model's own bit-exact
-features, so training and hardware see identical numbers.
+\textbf{Golden model.} \texttt{lda\_golden\_model.py} reproduces every integer of Stages 1--3 in two
+forms: a sample-by-sample model that mirrors the RTL's counters, and a vectorised model used for
+training. The two are cross-checked on every run (81 decisions on a real recording). Training uses
+the model's own bit-exact features, so training and hardware see identical numbers.
 
-\textbf{Does the chip arithmetic cost accuracy?} The golden model (8-bit ADC, streamed
-196-sample windows, shift normaliser, single weight scale) was compared with the software INT8 LDA
-on the same folds. Result: 77.61$\pm$4.34\% against 77.83$\pm$4.11\%, a difference of
-$-0.21$\pp\ with 95\% CI $[-0.72,+0.30]$ and $p=0.49$, so \textbf{no detectable difference}
-(18 subjects). The ranges actually used on real data leave wide margins:
-\begin{itemize}
-\item $\mu_f$: at most 13 of its 22 bits;
-\item $|S|$: at most 4047, against the INT32 limit.
-\end{itemize}
+\textbf{Does the chip arithmetic cost accuracy?} The golden model (8-bit ADC, streamed 196-sample
+windows, shift normaliser, single weight scale) was trained and tested by LOSO and compared with the
+software INT8 LDA on the same folds (Table~\ref{tab:golden}, Fig.~\ref{fig:persub}):
+77.61$\pm$4.34\% against 77.83$\pm$4.11\%, $\Delta=-0.21$\pp, 95\% CI $[-0.72,+0.30]$, $p=0.49$,
+9 subjects up and 9 down. \textbf{No detectable difference.}
+
+The value ranges on real data leave wide margins: $\mu_f$ uses at most 13 of its 22 bits, $k_f$ is
+1--12, $|S|\le4047$ against the INT32 limit, $|b|\le819$, and no feature clips.
+
+\begin{figure*}[t]\centering
+\includegraphics[width=\textwidth]{figures/per_subject.pdf}
+\caption{Left: held-out accuracy of the chip model and the software INT8 LDA for each subject; dashes
+show the chip model's accuracy on its own training subjects. Right: the two per subject; points lie
+on the diagonal.}\label{fig:persub}
+\end{figure*}
+
+\begin{table}[t]\centering\small
+\caption{Chip model vs software INT8 LDA, per held-out subject (\%).}\label{tab:golden}
+\begin{tabular}{lrr@{\hspace{6mm}}lrr}\toprule
+Subj. & Chip & Software & Subj. & Chip & Software\\\midrule
+S02 & 66.52 & 68.10 & S11 & 84.10 & 85.56\\
+S03 & 67.81 & 68.02 & S12 & 82.60 & 83.21\\
+S04 & 74.50 & 74.60 & S13 & 70.92 & 70.52\\
+S05 & 71.81 & 73.71 & S14 & 81.04 & 81.60\\
+S06 & 84.50 & 82.60 & S15 & 59.42 & 61.33\\
+S07 & 72.12 & 71.71 & S16 & 71.46 & 71.40\\
+S08 & 82.33 & 82.08 & S17 & 91.44 & 90.75\\
+S09 & 80.17 & 80.60 & S18 & 83.62 & 82.56\\
+S10 & 81.21 & 81.02 & S19 & 91.48 & 91.46\\\midrule
+\multicolumn{6}{c}{Mean: chip \textbf{77.61}$\pm$4.34, software 77.83$\pm$4.11}\\\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Where the errors are.} The confusion matrix of the chip model (Fig.~\ref{fig:confusion})
+shows that most errors are Wrist Extension predicted as Hand Open (29\%) and the reverse (18\%),
+the pair that shares extensor-digitorum activity. Hand Close and Wrist Flexion are recognised in
+82--85\% of windows. The LDA projection (Fig.~\ref{fig:lda}) shows the same: Hand Open and Wrist
+Extension overlap, and the held-out subject sits close to the training clusters.
+
+\begin{figure}[t]\centering
+\includegraphics[width=0.85\linewidth]{figures/confusion.pdf}
+\caption{Confusion matrix of the chip model over all held-out windows of all 18 folds (86\,400
+windows).}\label{fig:confusion}
+\end{figure}
+
+\begin{figure*}[t]\centering
+\includegraphics[width=\textwidth]{figures/lda.pdf}
+\caption{Left: first two discriminant directions of one fold, training windows (dots) and the
+held-out subject (crosses). Right: the INT8 weights loaded into the chip for that fold.}\label{fig:lda}
+\end{figure*}
 
 \textbf{Unit tests.} The feature ALU was tested exhaustively on all 196\,608 input combinations
-(every pair of INT8 values, each with the three signs of the previous difference). Each stage
-also had its own testbench. We checked that the testbenches catch real bugs by inserting
-deliberate ones: a logical instead of arithmetic shift, a missing rounding term, a wrong field, an
-unsigned multiply, $\geq$ instead of $>$, a dropped bias and a too-narrow accumulator. All were
-caught.
+(every pair of INT8 values with the three signs of the previous difference). Each stage had its own
+testbench. We checked that the testbenches catch real bugs by inserting deliberate ones: a logical
+instead of arithmetic shift, a missing rounding term, a wrong field, an unsigned multiply, $\geq$
+instead of $>$, a dropped bias and a too-narrow accumulator. All were caught.
 
-\textbf{Chip-level test.} A cocotb testbench (\texttt{RTL/tb/test\_emg\_top.py}) runs these steps:
-\begin{enumerate}
-\item it trains a model with the golden model and loads it through the configuration port;
-\item it drives an ADC daisy-chain model with a gesture stream at the real clock rates;
-\item at every stride it compares the $D$ values of $x_q$, the six class scores and the decided
-class against the golden model;
-\item it checks that the first decision after reset is masked and that no overrun occurs.
-\end{enumerate}
-A failure names the first stage that disagrees. The design passes at $C=8,12,16,20,24$, bit-exactly,
-and lints cleanly in Icarus (\texttt{-Wall}) and Yosys.
+\textbf{Chip-level test.} A cocotb testbench (Fig.~\ref{fig:verif}) trains a model with the golden
+model, loads it through the configuration port, drives an ADC daisy-chain model with a gesture
+stream at the real clock rates, and at every stride compares the $D$ values of $x_q$, the six class
+scores and the decided class against the golden model. It then checks that the first decision is
+masked and that no overrun occurs. A failure names the first stage that disagrees. The design passes
+bit-exactly at $C=8,12,16,20,24$ and lints cleanly in Icarus (\texttt{-Wall}) and Yosys.
+
+\begin{figure*}[t]\centering
+\includegraphics[width=\textwidth]{figures/verification.pdf}
+\caption{Chip-level verification: the same golden model trains the chip and produces the expected
+value of every intermediate signal.}\label{fig:verif}
+\end{figure*}
 
 %=======================================================================
 \section{Decisions and trade-offs}\label{sec:tradeoffs}
@@ -359,11 +533,12 @@ Evaluation & LOSO, trial-level validation, windows cut after the split & window-
 Gesture set & HC, HO, WF, WE & Index/Index Little set; 6 or 12 gestures & +14.1\pp; finger gestures inseparable with 8 surface electrodes; 6 gestures 69.0\%\\
 Classifier & INT8 LDA & MLP, LogReg, SVM, trees, CNN & all cheap linear models tied with the MLP; LDA has closed-form training and probabilistic scores; trees over budget or worse\\
 Arithmetic & INT8 weights, INT32 accumulator, no requantisation & FP32; per-class scales & 0.18\pp\ mean loss; a shared scale keeps the argmax\\
-Features & SABS, WL, ZC, SSC, Mitchell POW & float MAV/VAR/RMS, exact squares, log features & integer set matches the float reference; Mitchell square needs no multiplier\\
+Feature types & 5 of 8 & all 8; other subsets & nested LOSO, non-inferior, 40 instead of 64 inputs\\
+Features & SABS, WL, ZC, SSC, Mitchell POW & float MAV/VAR, exact squares, log features & integer set matches the float reference; Mitchell square needs no multiplier\\
 Normaliser & $(x-\mu)\gg k$, integer & z-score + float quantiser & no accuracy loss; only subtract, add and shift\\
 Partition & 1 compute core + 1--3 ADC pods & multi-board partial sums; master/slave & one core handles up to 40 channels at 1\,MHz; distributing adds synchronisation for no gain\\
-Stage 3 & 1 MAC, streaming argmax & parallel MACs; comparator tree & 850 of 1015 cycles at $C=24$; one MAC fits the budget\\
-Windows & 2 ping-pong banks of 98 & sliding sums; 2 write pointers & one write pointer; window = bank0 + bank1\\
+Stage 3 & 1 MAC, streaming argmax & parallel MACs; comparator tree & 850 of 1015 cycles at $C=24$\\
+Windows & 2 ping-pong banks of 98 & sliding sums; 2 write pointers & one write pointer; window = bank 0 + bank 1\\
 Memories & writable RAM, 1-cycle read & ROM; flip-flops with combinational read & each channel count needs its own model; maps to SRAM or flip-flops\\
 Clock crossing & toggle synchroniser for the event only & synchronise the data & data stable for about 1\,ms; one bit crosses\\
 Verification & bit-exact golden model, unit and chip tests, injected bugs & accuracy-only checks & every intermediate value checked; injected bugs caught\\\bottomrule
@@ -374,43 +549,42 @@ Table~\ref{tab:decisions} lists every decision. Three trade-offs shaped the desi
 \begin{enumerate}
 \item \textbf{Accuracy vs vocabulary.} Each added gesture costs accuracy. We favoured a reliable
 4-gesture interface over a 12-gesture one at 49\%.
-\item \textbf{Model capacity vs cost.} A larger model (MLP, CNN) gains nothing measurable over the
-LDA but multiplies MACs and memory.
+\item \textbf{Model capacity vs cost.} A larger model gains nothing measurable over the LDA but
+multiplies MACs and memory.
 \item \textbf{Generality vs area.} One core with a channel-count register serves 8 to 24 electrodes;
 the cost is sizing every memory for 24 channels.
 \end{enumerate}
 
 %=======================================================================
 \section{Conclusion and future work}
-Measured, subject-independent experiments justified each step. Gesture selection mattered most,
-model capacity did not, integer arithmetic and INT8 cost almost nothing, and a one-multiplier core
-at 1\,MHz is enough for 24 electrodes. The RTL is verified bit-exactly against a model whose
-accuracy matches the software reference. Future work:
+Gesture selection mattered most, model capacity did not, integer arithmetic and INT8 cost almost
+nothing, and a one-multiplier core at 1\,MHz is enough for 24 electrodes. The RTL is verified
+bit-exactly against a model whose accuracy matches the software reference. Next steps:
 \begin{enumerate}
 \item synthesise in a target process to report area and power;
-\item test the core with real ADC pods and recorded EMG.
+\item test the core with real ADC pods and recorded EMG;
+\item reduce the Hand Open / Wrist Extension confusion, the main remaining error.
 \end{enumerate}
 
 \appendix
 \onecolumn
 \section{Reproducing the results}
-All commands run from the repository root; each script prints the tables quoted above.
+All commands run from the repository root; each script prints the tables quoted above. The figures
+are drawn by \texttt{python docs/report/make\_figures.py}.
 \begin{center}\small
 \resizebox{\linewidth}{!}{%
 \begin{tabular}{lll}\toprule
 Result & Script & Subjects\\\midrule
 Gesture sets, classifiers, INT8 loss & \texttt{analysis/classifier\_classification.py}, \texttt{K\_4\_model\_MLP.py}, \texttt{K\_6\_model\_LR\_comparison.py} & 19\\
-Integer features H1--H6 & \texttt{analysis/K\_4\_LDA\_HW\_Experiments.py} & 18\\
 Feature-type selection & \texttt{analysis/fors\_emg\_feature\_selection\_lda.py} & 18\\
+Integer features H1--H6 & \texttt{analysis/K\_4\_LDA\_HW\_Experiments.py} & 18\\
 Chip model vs software LDA & \texttt{golden\_model/K\_4\_LDA\_Golden\_LOSO.py} & 18\\
 RTL & \texttt{RTL/tb/test\_emg\_top.py} (set \texttt{CHANNELS}) & synthetic\\\bottomrule
 \end{tabular}}
 \end{center}
 
-\onecolumn
-\section{Selected script outputs}
-Verbatim excerpts of the script printouts (18 subjects; the repository copy of the dataset lacks
-Subject~1). The full text is in \texttt{docs/report/outputs/script\_outputs.txt}.
+\section{Script outputs}
+Verbatim excerpts of the script printouts (18 subjects).
 {\scriptsize\verbatiminput{outputs/script_outputs.txt}}
 
 \end{document}
