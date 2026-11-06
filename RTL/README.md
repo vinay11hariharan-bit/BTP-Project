@@ -44,10 +44,11 @@ masked as before). Configuration addresses as on `main`, plus `0x7F2` = K−1 (d
 **Test on real FORS-EMG data** (`tb/`):
 
 ```bash
-python tb/mb_prepare.py      # from the repo root, once: writes tb/mb_data/ (already committed)
+python3 tb/mb_prepare.py     # from the repo root, once: writes tb/mb_data/ (already committed)
 cd RTL
-python tb/run_mb.py 4,4      # two boards; also 8 | 3,3,2 | 2,6 | 5,3 ...
-python tb/plot_mb.py waveform/mb_4_4.vcd ../docs/waveforms
+python3 tb/run_mb.py 4,4     # two boards; also 8 | 3,3,2 | 2,6 | 5,3 ...
+python3 tb/plot_mb.py waveform/mb_4_4.vcd ../docs/waveforms
+surfer waveform/mb_4_4.vcd   # or gtkwave: open the chain signals interactively
 ```
 
 - `mb_prepare.py` trains the chip LDA on every subject except 6 (trials 1–4), builds W' and b',

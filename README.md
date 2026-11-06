@@ -88,9 +88,40 @@ same filter, windows and folds. Scripts print their results; the older analysis 
 5. **Verification.** A bit-exact golden model (`golden_model/lda_golden_model.py`) drives exhaustive unit tests and a
    chip-level cocotb testbench; the chip reproduces the golden model's decisions bit for bit.
 
+## Multi-board system (this branch, `multi_board`)
+
+The chip on this branch is built to be chained. Each board is one `emg_top` with one 8-channel ADC
+pod; 1–3 boards in a chain act as one LDA classifier for 8–24 electrodes.
+
+```
+ ADC pod (ch 0-2)      ADC pod (ch 3-5)      ADC pod (ch 6-7)
+       │                     │                     │
+ ┌─────▼──────┐        ┌─────▼──────┐        ┌─────▼──────┐
+ │ Board 0    │◄─sums──│ Board 1    │◄─sums──│ Board 2    │
+ │ (head)     │──run──►│            │──run──►│ (tail)     │
+ └─────┬──────┘        └────────────┘        └────────────┘
+       ▼ class_out = argmax(0, D1, D2, D3)
+```
+
+- **How it splits the work.** Every board runs Stages 1–2 (features, normaliser) on its own channels
+  and Stage 3 on its own slice of the weights. Stage 3 uses the K−1 difference rows W′_c = W_c − W_0,
+  so each board only produces three partial sums p_1..p_3.
+- **What crosses between boards.** Only those three 32-bit sums, bit-serially, LSB first, tail → head.
+  Each board adds its own sums with one full adder as the bits pass. The head adds the bias b′ and
+  picks argmax(0, D_1, D_2, D_3), which equals the single-chip LDA decision.
+- **Synchronisation.** One 256 kHz clock for all boards. The head's `core_en` is passed down the chain
+  (`run`), so every board's sample timer starts in the same cycle. A wired-AND ready line starts the
+  sum transfer once every board has finished Stage 3.
+- **Verified on real data.** `RTL/tb/run_mb.py` feeds subject 6, trial 1 of FORS-EMG (4 gestures,
+  7840 samples) through 1–3 simulated boards. For the splits 8, 4+4 and 3+3+2, all 79 decisions are
+  bit-exact with the golden model, and 72 of 76 single-gesture windows are correct.
+
+Details, ports and commands: [`RTL/README.md`](RTL/README.md).
+
 ## Branches
 
-- `main` — the LDA chip described here.
+- `main` — the single-board LDA chip (two clocks, up to 24 channels on one core).
+- `multi_board` — the chained version described above.
 - `processor_flexibility` — the chip as a configurable feature front end for a microcontroller:
   on-chip LDA removed, real TI ADS1299 ADC interface, SPI slave link to an MCU, on-chip IIR filter,
   configurable windows, fault flags. See `LDAcore_with_proc/README.md` on that branch.
