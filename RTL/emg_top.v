@@ -1,31 +1,24 @@
-// emg_top — M9: chip top level. Wiring only.
+// emg_top — one board of the multi-board classifier (branch multi_board). Wiring only.
 //
-// Keep the ports, parameters AND these instance names; the chip testbench
-// looks inside u_norm and u_mac to tell you which stage is wrong:
+// Changes from main:
+//   * one clock (clk_sys, 256 kHz): the SPI side runs on it too, so cdc_toggle_sync and
+//     the second rst_sync are gone; frame_start is a toggle edge detect here.
+//   * at most 8 channels per board (CMAX = 8): banks, x_q, mu/k and W memories shrink.
+//   * Stage 3 holds the K-1 difference rows (NCLS = 3), and its result goes to
+//     u_link, which adds the partial sums of all boards; the head's u_link decides.
+//   * cfg_board selects which board a configuration write is for (board id from u_link).
 //
-//   u_rst_sys   rst_sync         clk_sys reset
-//   u_rst_spi   rst_sync         clk_spi reset
-//   u_cfg       emg_cfg_regs     (clk_sys)
-//   u_adc       emg_spi_adc      (clk_spi)  pass CMAX, SAMPLE_DIV
-//   u_cdc       cdc_toggle_sync  frame_tog -> frame_start in clk_sys
-//   u_accum     emg_feat_accum   Stage 1, rx_flat directly from u_adc (stable ~1 ms)
-//   u_norm      emg_shift_norm   Stage 2
-//   u_xq        emg_tp_ram       x_q RAM, 120 x 8: written by u_norm, read by u_mac
-//   u_mac       emg_lda_mac      Stage 3
-//   u_ctrl      emg_core_ctrl
-//
-// cfg_n_ch from u_cfg goes to u_adc, u_accum, u_norm, u_mac; core_en to u_adc.
-// overrun comes from u_accum; class_valid, class_out, primed from u_ctrl.
-// The block diagram on the interface page shows every connection.
+// Instance names are kept: u_rst_sys, u_cfg, u_adc, u_accum, u_norm, u_xq, u_mac, u_ctrl,
+// plus u_link (emg_chain_link).
 `default_nettype none
 
 module emg_top #(
-    parameter CMAX       = 24,
-    parameter SAMPLE_DIV = 8120
+    parameter CMAX       = 8,
+    parameter SAMPLE_DIV = 260,         // 256 kHz / 260 = 984.6 Hz
+    parameter NDIFF      = 3            // K-1 rows in Stage 3
 ) (
-    // clocks and reset
+    // clock and reset (clk_sys comes from the head board, LCLK)
     input  wire        clk_sys,
-    input  wire        clk_spi,
     input  wire        arst_n,
 
     // ADC pods (SPI daisy chain)
@@ -39,6 +32,21 @@ module emg_top #(
     input  wire        cfg_we,
     input  wire [11:0] cfg_addr,
     input  wire [31:0] cfg_wdata,
+    input  wire [1:0]  cfg_board,       // write goes to the board with this id
+
+    // board chain
+    input  wire        prs_up_i,        // neighbour present upstream / downstream
+    input  wire        prs_dn_i,
+    input  wire [1:0]  id_i,
+    output wire [1:0]  id_o,
+    input  wire        run_i,
+    output wire        run_o,
+    output wire        rdy_o,           // open drain on the board: wired-AND -> all_rdy_i
+    input  wire        all_rdy_i,
+    input  wire        up_dat_i,        // from the board downstream
+    input  wire        up_vld_i,
+    output wire        up_dat_o,        // to the board upstream
+    output wire        up_vld_o,
 
     // results
     output wire        class_valid,
@@ -50,18 +58,12 @@ module emg_top #(
     // -------------------------------------------------------------------------
     // Reset synchronisers
     // -------------------------------------------------------------------------
-    wire rst_sys_n, rst_spi_n;
+    wire rst_sys_n;
 
     rst_sync u_rst_sys (
         .clk    (clk_sys),
         .arst_n (arst_n),
         .rst_n  (rst_sys_n)
-    );
-
-    rst_sync u_rst_spi (
-        .clk    (clk_spi),
-        .arst_n (arst_n),
-        .rst_n  (rst_spi_n)
     );
 
     // -------------------------------------------------------------------------
@@ -80,10 +82,16 @@ module emg_top #(
     wire        [2:0]  b_addr;
     wire signed [31:0] b_data;
 
-    emg_cfg_regs u_cfg (
+    wire [1:0] my_id;
+    wire       cfg_we_b = cfg_we & (cfg_board == my_id);
+
+    emg_cfg_regs #(
+        .NF (5 * CMAX),
+        .NW (NDIFF * 5 * CMAX)
+    ) u_cfg (
         .clk       (clk_sys),
         .rst_n     (rst_sys_n),
-        .cfg_we    (cfg_we),
+        .cfg_we    (cfg_we_b),
         .cfg_addr  (cfg_addr),
         .cfg_wdata (cfg_wdata),
         .cfg_n_ch  (cfg_n_ch),
@@ -101,7 +109,7 @@ module emg_top #(
     );
 
     // -------------------------------------------------------------------------
-    // ADC front-end (clk_spi) and frame CDC into clk_sys
+    // ADC front-end, same clock: frame_start = edge of frame_tog
     // -------------------------------------------------------------------------
     wire [8*CMAX-1:0] rx_flat;
     wire              frame_tog;
@@ -111,10 +119,10 @@ module emg_top #(
         .CMAX       (CMAX),
         .SAMPLE_DIV (SAMPLE_DIV)
     ) u_adc (
-        .clk_spi    (clk_spi),
-        .rst_n      (rst_spi_n),
+        .clk_spi    (clk_sys),
+        .rst_n      (rst_sys_n),
         .cfg_n_ch   (cfg_n_ch),
-        .core_en    (core_en),
+        .core_en    (run),              // common enable from the chain
         .adc_convst (adc_convst),
         .adc_drdy_n (adc_drdy_n),
         .adc_cs_n   (adc_cs_n),
@@ -124,12 +132,12 @@ module emg_top #(
         .frame_tog  (frame_tog)
     );
 
-    cdc_toggle_sync u_cdc (
-        .clk       (clk_sys),
-        .rst_n     (rst_sys_n),
-        .tog_in    (frame_tog),
-        .pulse_out (frame_start)
-    );
+    reg frame_tog_d;
+    always @(posedge clk_sys or negedge rst_sys_n)
+        if (!rst_sys_n) frame_tog_d <= 1'b0;
+        else            frame_tog_d <= frame_tog;
+
+    assign frame_start = frame_tog ^ frame_tog_d;
 
     // -------------------------------------------------------------------------
     // Stage 1: feature accumulator
@@ -202,7 +210,7 @@ module emg_top #(
     //ram to hold the data in between after the normalization
     emg_tp_ram #(
         .W     (8),
-        .DEPTH (120),
+        .DEPTH (5 * CMAX),
         .AW    (7)
     ) u_xq (
         .clk   (clk_sys),
@@ -225,7 +233,9 @@ module emg_top #(
     wire        [2:0]  mac_class_out;
     wire signed [31:0] score;
 
-    emg_lda_mac u_mac (
+    emg_lda_mac #(
+        .NCLS (NDIFF)
+    ) u_mac (
         .clk         (clk_sys),
         .rst_n       (rst_sys_n),
         .cfg_n_ch    (cfg_n_ch),
@@ -248,7 +258,47 @@ module emg_top #(
     );
 
     // -------------------------------------------------------------------------
-    // Core sequencer
+    // Board chain: adds the partial sums of all boards, head decides
+    // -------------------------------------------------------------------------
+    wire       run;
+    wire       dec_valid;
+    wire [2:0] dec_cls;
+
+    emg_chain_link #(
+        .NV (NDIFF)
+    ) u_link (
+        .clk         (clk_sys),
+        .rst_n       (rst_sys_n),
+        .prs_up_i    (prs_up_i),
+        .prs_dn_i    (prs_dn_i),
+        .is_head     (),
+        .is_tail     (),
+        .id_i        (id_i),
+        .id_o        (id_o),
+        .my_id       (my_id),
+        .core_en     (core_en),
+        .run_i       (run_i),
+        .run_o       (run_o),
+        .run         (run),
+        .cfg_we      (cfg_we_b),
+        .cfg_addr    (cfg_addr),
+        .cfg_wdata   (cfg_wdata),
+        .score_valid (score_valid),
+        .score_cls   (score_cls),
+        .score       (score),
+        .mac_done    (mac_class_valid),
+        .rdy_o       (rdy_o),
+        .all_rdy_i   (all_rdy_i),
+        .up_dat_i    (up_dat_i),
+        .up_vld_i    (up_vld_i),
+        .up_dat_o    (up_dat_o),
+        .up_vld_o    (up_vld_o),
+        .dec_valid   (dec_valid),
+        .dec_cls     (dec_cls)
+    );
+
+    // -------------------------------------------------------------------------
+    // Core sequencer (masks the first decision, drives the output pins)
     // -------------------------------------------------------------------------
     emg_core_ctrl u_ctrl (
         .clk             (clk_sys),
@@ -258,8 +308,8 @@ module emg_top #(
         .norm_done       (norm_done),
         .swap            (swap),
         .mac_start       (mac_start),
-        .mac_class_valid (mac_class_valid),
-        .mac_class_out   (mac_class_out),
+        .mac_class_valid (dec_valid),
+        .mac_class_out   (dec_cls),
         .class_valid     (class_valid),
         .class_out       (class_out),
         .primed          (primed)

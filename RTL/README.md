@@ -1,4 +1,71 @@
-# RTL — INT8 LDA gesture-classification core
+# Branch `multi_board`: up to 8 channels per board, boards in a chain
+
+Each board is one `emg_top` with one 8-channel pod. Boards are chained; together they make one
+LDA classifier for 8, 12, 16 or 24 electrodes. Nothing but the K−1 partial sums crosses between
+boards.
+
+**The maths.** Stage 3 of every board holds the K−1 difference rows `W'_c = W_c − W_0`
+(c = 1..3 for 4 gestures), restricted to its own features, so it computes partial sums
+`p_c = Σ W'_cf q_f`. The head also adds `b'_c = b_c − b_0`. The decision only needs the totals
+`D_c = Σ_boards p_c`: class = argmax{0, D_1, D_2, D_3} (strict >), which equals argmax_c s_c of the
+single-chip LDA. Stages 1–2 are per channel and need no change.
+
+**What changed from `main`.**
+
+| File | Change |
+|---|---|
+| `emg_chain_link.v` | **new**: head/tail detection, board id, common enable, barrier, bit-serial adder, head argmax |
+| `emg_top.v` | one clock (`clk_spi` removed), `CMAX = 8`, `SAMPLE_DIV = 260`, Stage 3 with `NCLS = 3`, `u_link` added, `cfg_board` + chain ports |
+| `emg_cfg_regs.v` | memory depths are parameters (`NF`, `NW`); top passes 40 and 120 |
+| `cdc_toggle_sync.v` | **removed**: one clock, so `frame_start` is a toggle edge detect in the top |
+| other modules | unchanged (`emg_spi_adc` simply runs on `clk_sys`) |
+
+**Clock.** One 256 kHz clock for everything (SCLK 128 kHz, 984.6 Hz sampling, 260 cycles per sample).
+With at most 8 channels the longest per-sample work is Stage 1 + Stage 2 = 8 + 42 cycles; Stage 3
+(3 × 41 + 2) and the chain transfer (96 bits + 1 cycle per board) overlap the next samples.
+
+**Chain ports of `emg_top`.**
+
+| Port | Dir | Meaning |
+|---|---|---|
+| `prs_up_i`, `prs_dn_i` | in | a neighbour is present upstream / downstream (head: nothing upstream, tail: nothing downstream) |
+| `id_i` → `id_o` | in/out | board id: head 0, +1 per board; `cfg_board` selects which board a cfg write is for |
+| `run_i` → `run_o` | in/out | common enable from the head's `core_en`, passes straight through: every board's CONVST timer starts in the same cycle |
+| `rdy_o`, `all_rdy_i` | out/in | open drain on the boards = wired-AND; high when every board's Stage 3 is done |
+| `up_dat_i/up_vld_i` → `up_dat_o/up_vld_o` | in/out | partial sums, 3 × 32 bits, LSB first, toward the head |
+
+**One stride.** Each board runs Stages 1–3 on its own channels (a board with fewer channels
+reads its pod sooner and finishes sooner). When `all_rdy` rises, `rdy` clears on every board in
+the same cycle, the tail starts sending, every board adds its own bit (one full adder + carry
+flip-flop) and passes the sum on one clock later, and the head compares each total as it arrives
+and decides after the last bit (`dec_valid` → `emg_core_ctrl` → `class_valid`, first decision
+masked as before). Configuration addresses as on `main`, plus `0x7F2` = K−1 (default 3).
+
+**Test on real FORS-EMG data** (`tb/`):
+
+```bash
+python tb/mb_prepare.py      # from the repo root, once: writes tb/mb_data/ (already committed)
+cd RTL
+python tb/run_mb.py 4,4      # two boards; also 8 | 3,3,2 | 2,6 | 5,3 ...
+python tb/plot_mb.py waveform/mb_4_4.vcd ../docs/waveforms
+```
+
+- `mb_prepare.py` trains the chip LDA on every subject except 6 (trials 1–4), builds W' and b',
+  and takes **subject 6, trial 1**: the most active 1960 samples (2 s) of each of the 4 gestures,
+  joined into one 7840-sample stream (`mb_data/samples.txt` for `$readmemh`, `samples.csv`
+  readable). It runs the golden model on that stream and writes the expected decision per stride.
+- `tb_mb.v` instantiates 1–3 boards side by side with one `adc_pod_model` each, shares the clock,
+  CONVST-paced sample stream and cfg bus, wires the chain and prints every decision.
+  `run_mb.py` slices the model per board, builds and runs it (about 40 s), and compares.
+- Result: **79 of 79 decisions bit-exact** with the golden model for the splits 8, 4+4, 2+6,
+  6+2, 5+3 and 3+3+2; 72 of 76 single-gesture windows correct (the 4 errors are the model's, the
+  single-chip LDA makes the same decisions).
+- The VCD (`waveform/mb_<split>.vcd`, about 1 MB, git-ignored) holds only the chain signals,
+  each board's Stage 3 and partial sums, and the decision.
+
+The cocotb test `tb/test_emg_top.py` is for the two-clock chip on `main` and does not run here.
+
+# RTL on `main` — INT8 LDA gesture-classification core
 
 Fixed-function digital core that turns 8–24 channels of 8-bit EMG samples into one gesture
 decision every ~99.5 ms. Plain Verilog-2005, two clocks, no multiplier except the one 8 × 8 MAC.

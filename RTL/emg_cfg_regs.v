@@ -14,7 +14,10 @@
 // ports (1-cycle latency). norm_mu = word[26:5], norm_k = word[4:0].
 `default_nettype none
 
-module emg_cfg_regs (
+module emg_cfg_regs #(
+    parameter NF = 120,                 // norm words  (5 x max channels)
+    parameter NW = 720                  // weight words (classes x 5 x max channels)
+) (
     input  wire               clk,
     input  wire               rst_n,
     input  wire               cfg_we,
@@ -34,19 +37,19 @@ module emg_cfg_regs (
     output wire signed [31:0] b_data
 );
     // ---------------------------------------------------------------- address decode
-    wire        sel_norm = (cfg_addr[11:7] == 5'd0)    && (cfg_addr[6:0] < 7'd120);   // 0x000-0x077
-    wire        sel_w    = (cfg_addr >= 12'h100)       && (cfg_addr < 12'h3D0);       // 0x100-0x3CF
+    wire        sel_norm = (cfg_addr[11:7] == 5'd0)    && (cfg_addr[6:0] < NF);      // 0x000-0x077
+    wire        sel_w    = (cfg_addr >= 12'h100)       && (cfg_addr < 12'h100 + NW); // 0x100-0x3CF
     wire        sel_b    = (cfg_addr[11:3] == 9'h080)  && (cfg_addr[2:0] < 3'd6);     // 0x400-0x405
     wire [11:0] w_off    = cfg_addr - 12'h100;                                       // 0..719
 
     // ---------------------------------------------------------------- memories
     wire [26:0] norm_q;
 
-    emg_tp_ram #(.W(27), .DEPTH(120), .AW(7)) u_norm_mem (
+    emg_tp_ram #(.W(27), .DEPTH(NF), .AW(7)) u_norm_mem (
         .clk(clk), .we(cfg_we & sel_norm), .waddr(cfg_addr[6:0]), .wdata(cfg_wdata[26:0]),
         .re(norm_re), .raddr(norm_addr), .rdata(norm_q));
 
-    emg_tp_ram #(.W(8), .DEPTH(720), .AW(10)) u_w_mem (
+    emg_tp_ram #(.W(8), .DEPTH(NW), .AW(10)) u_w_mem (
         .clk(clk), .we(cfg_we & sel_w), .waddr(w_off[9:0]), .wdata(cfg_wdata[7:0]),
         .re(w_re), .raddr(w_addr), .rdata(w_data));
 
