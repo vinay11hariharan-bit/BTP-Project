@@ -114,6 +114,7 @@ module emg_top #(
     wire [8*CMAX-1:0] rx_flat;
     wire              frame_tog;
     wire              frame_start;
+    wire              run;              // common enable, driven by u_link below
 
     emg_spi_adc #(
         .CMAX       (CMAX),
@@ -260,7 +261,6 @@ module emg_top #(
     // -------------------------------------------------------------------------
     // Board chain: adds the partial sums of all boards, head decides
     // -------------------------------------------------------------------------
-    wire       run;
     wire       dec_valid;
     wire [2:0] dec_cls;
 
