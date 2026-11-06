@@ -96,7 +96,8 @@ python tb/test_emg_top.py
   the D `x_q` writes (Stages 1–2), the 6 class scores (Stage 3) and `class_out`; then that the first
   decision is masked, `primed = 1` and `overrun = 0`. A failure names the first stage that disagrees.
 - Run time about 1.5 min (C = 8) to 3 min (C = 24). A VCD of every signal is written to `waveform/`
-  (git-ignored; large).
+  (git-ignored; large). `python tb/plot_waveforms.py` (run from `RTL/` after a C = 8 run) draws
+  GTKWave-style pictures of the main events into `docs/waveforms/`.
 - Passed for C = 8, 12, 16, 20 and 24. During development, the feature ALU was also checked exhaustively
   (all 196,608 input combinations) and each stage had its own unit testbench.
 
