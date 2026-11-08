@@ -1,190 +1,194 @@
-// emg_chain_link — joins up to 4 boards into one LDA classifier.
+// emg_chain_link — lets several boards act as one LDA classifier.
 //
-// Every board runs Stages 1-3 on its own channels (at most 8). Stage 3 is loaded with the
-// K-1 difference rows W'_c = W_c - W_0 (c = 1..K-1), so its "scores" are partial sums
-//     p_c = sum over this board's features of W'_cf * q_f      (+ b'_c on the head only).
-// The decision only needs the totals D_c = sum over boards of p_c:
-//     class = argmax { 0, D_1, ..., D_{K-1} }       (strict >, ties keep the lower class)
-// which is exactly argmax_c s_c of the single-chip LDA.
+// Each board only has the features of its own channels, so its Stage 3 can only give a
+// partial score. We load Stage 3 with the difference rows W'_c = W_c - W_0 (c = 1..K-1),
+// add the partial scores of all boards, and pick
 //
-// Chain, head = board with nothing upstream, tail = board with nothing downstream:
+//     class = argmax{ 0, D_1, ..., D_(K-1) }        D_c = sum of p_c over all boards
 //
-//   host -- [board 0] -- [board 1] -- [board 2]
-//            head                       tail
-//   run   ---------->  ---------->           common enable, passes straight through
-//   id    ---------->  ---------->           board number: head 0, then +1 per board
-//   up    <----------  <----------           partial sums, bit-serial, LSB first
-//   rdy   ----+-----------+-------------+     wired-AND: high when every board is done
+// which gives the same answer as the single-chip LDA. The head adds the bias b'_c in its
+// own Stage 3, the other boards load b' = 0.
 //
-// Per stride:
-//   1. Each board's Stage 3 runs; its time depends on the channel count, and boards with
-//      fewer channels also finish their SPI read earlier, so they are not in step.
-//   2. Stage 3 done: rdy = 1. The slowest board decides when all_rdy rises. rdy is cleared
-//      on that rising edge (the same cycle on every board), not by the local stride_done,
-//      so a fast board can never pair its new result with a slow board's old one.
-//   3. On the all_rdy rising edge the tail starts sending its K-1 partials (32 bits each,
-//      LSB first). Each board adds its own partial bit by bit (one full adder + carry) and
-//      forwards the sum one clock later, so the chain adds only 1 cycle per board.
-//   4. The head keeps the incoming totals, runs the argmax as each word completes and
-//      pulses dec_valid / dec_cls after the last word.
+// The boards sit in a line. The one with nothing upstream is the head (id 0, it decides);
+// the one with nothing downstream is the tail (it starts the transfer).
 //
-// K-1 (number of words) is a register: cfg write 0x7F2 <= K-1 (1..3, reset 3).
+// Every stride:
+//   - a board raises rdy when its Stage 3 is done. rdy is a wired-AND on the boards, so
+//     all_rdy goes high only when the slowest board is done.
+//   - on that edge every board drops rdy (same cycle everywhere) and the tail starts
+//     shifting out its K-1 partials, 32 bits each, LSB first.
+//   - every other board adds its own partial to the incoming bits with one full adder and
+//     passes the sum on a clock later. The head keeps the totals and does the argmax.
+//
+// rdy is cleared on the common edge and not on the local stride_done: a board with fewer
+// channels finishes its SPI read early and would otherwise mix its new partial with an
+// old one from a slower board.
+//
+// The number of words (K-1) is written at 0x7F2, default 3.
 `default_nettype none
 
 module emg_chain_link #(
-    parameter NV = 3,                       // max words per decision (K-1 for 4 gestures)
-    parameter WB = 32                       // bits per word
+    parameter NV = 3,       // max partial sums per board (K-1)
+    parameter WB = 32       // bits per partial sum
 ) (
     input  wire               clk,
     input  wire               rst_n,
 
-    // position in the chain (a neighbour present pulls the pin high)
-    input  wire               prs_up_i,     // board upstream present
-    input  wire               prs_dn_i,     // board downstream present
+    // where we are in the chain (pins pulled high by a neighbour)
+    input  wire               prs_up_i,
+    input  wire               prs_dn_i,
     output wire               is_head,
     output wire               is_tail,
     input  wire        [1:0]  id_i,
     output wire        [1:0]  id_o,
     output wire        [1:0]  my_id,
 
-    // common enable
-    input  wire               core_en,      // this board's own enable register
+    // start: the head's core_en runs every board
+    input  wire               core_en,
     input  wire               run_i,
     output wire               run_o,
-    output wire               run,          // to the ADC interface of this board
+    output wire               run,
 
-    // configuration (this board's writes only)
+    // config writes for this board
     input  wire               cfg_we,
     input  wire        [11:0] cfg_addr,
     input  wire        [31:0] cfg_wdata,
 
-    // local Stage 3
+    // our own Stage 3 results
     input  wire               score_valid,
     input  wire        [2:0]  score_cls,
     input  wire signed [31:0] score,
     input  wire               mac_done,
 
-    // barrier
     output reg                rdy_o,
     input  wire               all_rdy_i,
 
-    // bit-serial partial sums
+    // serial link towards the head
     input  wire               up_dat_i,
     input  wire               up_vld_i,
     output reg                up_dat_o,
     output reg                up_vld_o,
 
-    // decision (head only)
+    // final decision (only used on the head)
     output reg                dec_valid,
     output reg         [2:0]  dec_cls
 );
-    localparam BW = $clog2(NV * WB);
 
-    // ------------------------------------------------------------- position, id, enable
+    // position and id
     assign is_head = ~prs_up_i;
     assign is_tail = ~prs_dn_i;
     assign my_id   = is_head ? 2'd0 : id_i;
     assign id_o    = my_id + 2'd1;
 
-    reg en_r;                                   // head: registered enable for the whole chain
+    // The head registers its enable once; everyone else just passes it on, so all
+    // boards see run rise in the same cycle and their CONVST timers stay together.
+    reg head_en;
     always @(posedge clk or negedge rst_n)
-        if (!rst_n) en_r <= 1'b0;
-        else        en_r <= core_en;
+        if (!rst_n) head_en <= 1'b0;
+        else        head_en <= core_en;
 
-    assign run   = is_head ? en_r : run_i;
+    assign run   = is_head ? head_en : run_i;
     assign run_o = run;
 
-    // ------------------------------------------------------------- K-1 register
-    reg [1:0] n_val;
+    // number of words per decision
+    reg [1:0] nwords;
     always @(posedge clk or negedge rst_n)
-        if (!rst_n)                              n_val <= NV;
-        else if (cfg_we && cfg_addr == 12'h7F2)  n_val <= cfg_wdata[1:0];
+        if (!rst_n)                             nwords <= NV;
+        else if (cfg_we && cfg_addr == 12'h7F2) nwords <= cfg_wdata[1:0];
 
-    wire [BW-1:0] n_bits = n_val * WB;
-
-    // ------------------------------------------------------------- local partial sums
+    // keep our partial sums as Stage 3 hands them out
     reg [WB-1:0] part [0:NV-1];
     integer i;
     always @(posedge clk or negedge rst_n)
-        if (!rst_n) for (i = 0; i < NV; i = i + 1) part[i] <= {WB{1'b0}};
-        else if (score_valid && score_cls < NV) part[score_cls] <= score;
+        if (!rst_n)
+            for (i = 0; i < NV; i = i + 1) part[i] <= 0;
+        else if (score_valid && score_cls < NV)
+            part[score_cls] <= score;
 
-    // ------------------------------------------------------------- barrier
-    reg all_d;
+    // wait for everyone
+    reg all_rdy_d;
     always @(posedge clk or negedge rst_n)
-        if (!rst_n) all_d <= 1'b0;
-        else        all_d <= all_rdy_i;
+        if (!rst_n) all_rdy_d <= 1'b0;
+        else        all_rdy_d <= all_rdy_i;
 
-    wire go = all_rdy_i & ~all_d;               // same cycle on every board
+    wire go = all_rdy_i & ~all_rdy_d;
 
     always @(posedge clk or negedge rst_n)
         if (!rst_n)        rdy_o <= 1'b0;
         else if (go)       rdy_o <= 1'b0;
         else if (mac_done) rdy_o <= 1'b1;
 
-    // ------------------------------------------------------------- tail: stream source
-    reg [BW-1:0] t_left;
+    // The tail has nobody below it, so it makes its own valid and adds to zeros.
+    reg [6:0] tail_left;
     always @(posedge clk or negedge rst_n)
-        if (!rst_n)                 t_left <= {BW{1'b0}};
-        else if (go && is_tail)     t_left <= n_bits;
-        else if (t_left != 0)       t_left <= t_left - 1'b1;
+        if (!rst_n)               tail_left <= 0;
+        else if (go && is_tail)   tail_left <= nwords * WB;
+        else if (tail_left != 0)  tail_left <= tail_left - 1'b1;
 
-    wire bit_in = is_tail ? 1'b0       : up_dat_i;
-    wire vld_in = is_tail ? (t_left != 0) : up_vld_i;
+    wire in_bit = is_tail ? 1'b0 : up_dat_i;
+    wire in_vld = is_tail ? (tail_left != 0) : up_vld_i;
 
-    // ------------------------------------------------------------- serial adder
-    reg  [BW-1:0] bcnt;                         // position in the stream
-    reg           carry;
-    wire [1:0]    widx = bcnt / WB;
-    wire [4:0]    bidx = bcnt % WB;
-    wire          mine = part[widx][bidx];
-    wire          sum  = bit_in ^ mine ^ carry;
-    wire          cout = (bit_in & mine) | (carry & (bit_in ^ mine));
-    wire          last_bit  = (bidx == WB - 1);
-    wire          last_word = (widx == n_val - 1'b1);
+    // Serial add: which word and which bit we are on, plus one carry.
+    reg [1:0] word;
+    reg [4:0] bit_n;
+    reg       carry;
+
+    wire my_bit    = part[word][bit_n];
+    wire sum       = in_bit ^ my_bit ^ carry;
+    wire carry_nxt = (in_bit & my_bit) | (carry & (in_bit ^ my_bit));
+    wire last_bit  = (bit_n == WB - 1);
+    wire last_word = (word == nwords - 1'b1);
 
     always @(posedge clk or negedge rst_n)
         if (!rst_n) begin
-            bcnt <= {BW{1'b0}};  carry <= 1'b0;
-            up_dat_o <= 1'b0;    up_vld_o <= 1'b0;
+            word <= 0; bit_n <= 0; carry <= 1'b0;
+            up_dat_o <= 1'b0; up_vld_o <= 1'b0;
         end else begin
-            up_vld_o <= vld_in;
-            up_dat_o <= vld_in & sum;
+            up_vld_o <= in_vld;
+            up_dat_o <= in_vld & sum;
+
             if (go) begin
-                bcnt <= {BW{1'b0}};  carry <= 1'b0;
-            end else if (vld_in) begin
-                bcnt  <= (last_bit && last_word) ? {BW{1'b0}} : bcnt + 1'b1;
-                carry <= last_bit ? 1'b0 : cout;
+                word <= 0; bit_n <= 0; carry <= 1'b0;
+            end else if (in_vld) begin
+                bit_n <= bit_n + 1'b1;          // wraps 31 -> 0 by itself
+                carry <= last_bit ? 1'b0 : carry_nxt;
+                if (last_bit)
+                    word <= last_word ? 2'd0 : word + 1'b1;
             end
         end
 
-    // ------------------------------------------------------------- head: collect + argmax
-    reg        [WB-1:0] acc;                    // word being received, LSB first
+    // Head: shift each total in, compare when it is complete. Class 0 is the baseline
+    // (D_0 = 0), and a strict > keeps the lower class on a tie, like the single chip.
+    reg        [WB-1:0] shreg;
     reg signed [WB-1:0] best;
     reg         [2:0]   best_cls;
-    wire signed [WB-1:0] word = {sum, acc[WB-1:1]};
+    wire signed [WB-1:0] total = {sum, shreg[WB-1:1]};
 
     always @(posedge clk or negedge rst_n)
         if (!rst_n) begin
-            acc <= {WB{1'b0}};  best <= {WB{1'b0}};  best_cls <= 3'd0;
-            dec_valid <= 1'b0;  dec_cls <= 3'd0;
+            shreg <= 0; best <= 0; best_cls <= 0;
+            dec_valid <= 1'b0; dec_cls <= 0;
         end else begin
             dec_valid <= 1'b0;
+
             if (go) begin
-                best <= {WB{1'b0}};  best_cls <= 3'd0;      // class 0 has D_0 = 0
-            end else if (is_head && vld_in) begin
-                acc <= word;
+                best     <= 0;
+                best_cls <= 0;
+            end else if (is_head && in_vld) begin
+                shreg <= total;
                 if (last_bit) begin
-                    if (word > best) begin
-                        best <= word;  best_cls <= widx + 3'd1;
+                    if (total > best) begin
+                        best     <= total;
+                        best_cls <= word + 1'b1;
                     end
                     if (last_word) begin
                         dec_valid <= 1'b1;
-                        dec_cls   <= (word > best) ? widx + 3'd1 : best_cls;
+                        dec_cls   <= (total > best) ? word + 1'b1 : best_cls;
                     end
                 end
             end
         end
+
 endmodule
 
 `default_nettype wire
