@@ -1,0 +1,58 @@
+============================================================================================
+  FORS-EMG — merge all 12 gestures into 4 classes vs drop to 4 gestures (chip INT8 LDA, LOSO)
+============================================================================================
+
+  273,600 windows, 19 subjects, 12 gestures, 40 features   (10 s)
+
+  [ 1/19] S01  drop 87.21%  merge-4 65.32%  12->4 73.66%  12-class 59.14%   groups {HC, ThL, ThUp}  {HO, RadD, WE}  {Idx, IdxL, Peace}  {RAng, UlnD, WF} (inner 64.9%)
+  [ 2/19] S02  drop 65.79%  merge-4 58.76%  12->4 64.04%  12-class 44.02%   groups {HC, ThL, ThUp}  {HO, UlnD, WE}  {Idx, IdxL, RAng}  {Peace, RadD, WF} (inner 65.5%)
+  [ 3/19] S03  drop 68.06%  merge-4 39.69%  12->4 36.62%  12-class 18.31%   groups {HC, ThL, ThUp}  {HO, RadD, WE}  {Idx, IdxL, RAng}  {Peace, UlnD, WF} (inner 67.4%)
+  [ 4/19] S04  drop 75.29%  merge-4 54.87%  12->4 57.47%  12-class 42.22%   groups {HC, ThL, ThUp}  {HO, UlnD, WE}  {Idx, IdxL, RAng}  {Peace, RadD, WF} (inner 66.1%)
+  [ 5/19] S05  drop 71.52%  merge-4 66.10%  12->4 64.78%  12-class 38.08%   groups {HC, ThL, ThUp}  {HO, UlnD, WE}  {Idx, IdxL, RAng}  {Peace, RadD, WF} (inner 65.5%)
+  [ 6/19] S06  drop 82.92%  merge-4 75.06%  12->4 78.01%  12-class 54.67%   groups {HC, ThL, ThUp}  {HO, UlnD, WE}  {Idx, IdxL, RAng}  {Peace, RadD, WF} (inner 64.5%)
+  [ 7/19] S07  drop 72.73%  merge-4 63.17%  12->4 66.34%  12-class 47.63%   groups {HC, ThL, ThUp}  {HO, RadD, WE}  {Idx, IdxL, RAng}  {Peace, UlnD, WF} (inner 64.8%)
+  [ 8/19] S08  drop 81.79%  merge-4 70.14%  12->4 73.80%  12-class 60.26%   groups {HC, ThL, ThUp}  {HO, RadD, WE}  {Idx, IdxL, RAng}  {Peace, UlnD, WF} (inner 64.0%)
+  [ 9/19] S09  drop 80.54%  merge-4 65.53%  12->4 65.00%  12-class 47.78%   groups {HC, Idx, WF}  {HO, UlnD, WE}  {IdxL, Peace, RadD}  {RAng, ThL, ThUp} (inner 64.5%)
+  [10/19] S10  drop 80.48%  merge-4 53.71%  12->4 56.69%  12-class 45.59%   groups {HC, ThL, ThUp}  {HO, UlnD, WE}  {Idx, RAng, WF}  {IdxL, Peace, RadD} (inner 65.3%)
+  [11/19] S11  drop 83.06%  merge-4 69.44%  12->4 65.56%  12-class 51.19%   groups {HC, ThL, ThUp}  {HO, UlnD, WE}  {Idx, RAng, WF}  {IdxL, Peace, RadD} (inner 64.5%)
+  [12/19] S12  drop 82.56%  merge-4 58.84%  12->4 61.42%  12-class 45.53%   groups {HC, ThL, ThUp}  {HO, RadD, WE}  {Idx, IdxL, RAng}  {Peace, UlnD, WF} (inner 64.9%)
+  [13/19] S13  drop 70.65%  merge-4 52.91%  12->4 50.40%  12-class 36.30%   groups {HC, ThL, ThUp}  {HO, UlnD, WE}  {Idx, Peace, WF}  {IdxL, RadD, RAng} (inner 65.4%)
+  [14/19] S14  drop 80.88%  merge-4 64.57%  12->4 65.38%  12-class 50.26%   groups {HC, ThL, ThUp}  {HO, UlnD, WE}  {Idx, Peace, WF}  {IdxL, RadD, RAng} (inner 64.7%)
+  [15/19] S15  drop 59.40%  merge-4 48.35%  12->4 48.10%  12-class 32.46%   groups {HC, ThL, ThUp}  {HO, UlnD, WE}  {Idx, Peace, WF}  {IdxL, RadD, RAng} (inner 66.2%)
+  [16/19] S16  drop 72.79%  merge-4 46.78%  12->4 54.35%  12-class 32.07%   groups {HC, ThL, ThUp}  {HO, UlnD, WE}  {Idx, IdxL, RAng}  {Peace, RadD, WF} (inner 65.6%)
+  [17/19] S17  drop 91.42%  merge-4 69.53%  12->4 75.38%  12-class 61.95%   groups {HC, ThL, ThUp}  {HO, UlnD, WE}  {Idx, Peace, WF}  {IdxL, RadD, RAng} (inner 64.3%)
+  [18/19] S18  drop 80.33%  merge-4 62.92%  12->4 67.88%  12-class 51.53%   groups {HC, ThL, ThUp}  {HO, UlnD, WE}  {Idx, Peace, WF}  {IdxL, RadD, RAng} (inner 64.6%)
+  [19/19] S19  drop 91.25%  merge-4 71.55%  12->4 73.36%  12-class 62.74%   groups {HC, Idx, Peace}  {HO, UlnD, WE}  {IdxL, RadD, WF}  {RAng, ThL, ThUp} (inner 64.6%)
+
+────────────────────────────────────────────────────────────────────────────────────────────
+  Accuracy on the held-out subject (mean over 19 subjects, ± 95% CI)
+────────────────────────────────────────────────────────────────────────────────────────────
+Model                                      Test INT8 %    Data dropped                  Class rows    MACs
+-----------------------------------------  -------------  --------------------------  ------------  ------
+drop: HC, HO, WF, WE                       77.82 ± 4.10   2/3 of the gestures unused             4     160
+merge-4: 12 gestures in 4 groups           60.91 ± 4.55   nothing                                4     160
+12->4: 12-class LDA, mapped to groups      63.07 ± 5.07   nothing                               12     480
+12-class LDA (reference)                   46.41 ± 5.55   nothing                               12     480
+6-group map: 6-class LDA (earlier design)  72.38 ± 4.11   nothing                                6     240
+6-group map: 12-class LDA, mapped          70.71 ± 4.62   nothing                               12     480
+
+Comparison          Δ pp  95% CI              Wilcoxon p  Up/Down    Verdict
+----------------  ------  ----------------  ------------  ---------  ---------
+merge-4 vs drop   -16.92  [-20.27, -13.56]      3.81e-06  0/19       worse
+12->4 vs drop     -14.76  [-18.24, -11.28]      3.81e-06  0/19       worse
+12->4 vs merge-4    2.16  [+0.49, +3.83]        0.0204    13/6       better
+6-group vs drop    -5.45  [-8.02, -2.87]        0.000267  1/18       worse
+12->6 vs drop      -7.12  [-10.36, -3.87]       0.000523  2/17       worse
+  (6-group map: G1 holds 50% of all windows, so always answering G1 scores that much)
+
+  Groupings chosen across the 19 folds:
+     5 x  {HC, ThL, ThUp}  {HO, UlnD, WE}  {Idx, IdxL, RAng}  {Peace, RadD, WF}
+     5 x  {HC, ThL, ThUp}  {HO, UlnD, WE}  {Idx, Peace, WF}  {IdxL, RadD, RAng}
+     4 x  {HC, ThL, ThUp}  {HO, RadD, WE}  {Idx, IdxL, RAng}  {Peace, UlnD, WF}
+     2 x  {HC, ThL, ThUp}  {HO, UlnD, WE}  {Idx, RAng, WF}  {IdxL, Peace, RadD}
+     1 x  {HC, ThL, ThUp}  {HO, RadD, WE}  {Idx, IdxL, Peace}  {RAng, UlnD, WF}
+     1 x  {HC, Idx, WF}  {HO, UlnD, WE}  {IdxL, Peace, RadD}  {RAng, ThL, ThUp}
+     1 x  {HC, Idx, Peace}  {HO, UlnD, WE}  {IdxL, RadD, WF}  {RAng, ThL, ThUp}
+
+  Total runtime : 0.4 min
+============================================================================================

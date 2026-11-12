@@ -1,0 +1,25 @@
+== 1. emg_chain_link unit test
+   UNIT PASS  boards 1  strides 3000  decisions 3000
+   UNIT PASS  boards 2  strides 3000  decisions 3000
+   UNIT PASS  boards 3  strides 3000  decisions 3000
+   UNIT PASS  boards 4  strides 3000  decisions 3000
+
+== 2. mutation test (each bug must be caught)
+   caught  carry not cleared between words
+   caught  adder ignores the carry
+   caught  tie goes to the higher class
+   caught  last word dropped
+   caught  decision uses stale best_cls
+   caught  class 0 baseline not reset
+   caught  rdy never cleared
+   caught  ids not incremented
+
+== 3. whole chip, real FORS-EMG (subject 6, trial 1, 79 decisions)
+   split 8      79/79 bit-exact   (golden = single chip on 79/79)
+   split 4,4    79/79 bit-exact   (golden = single chip on 79/79)
+   split 2,6    79/79 bit-exact   (golden = single chip on 79/79)
+   split 6,2    79/79 bit-exact   (golden = single chip on 79/79)
+   split 5,3    79/79 bit-exact   (golden = single chip on 79/79)
+   split 3,3,2  79/79 bit-exact   (golden = single chip on 79/79)
+
+ALL PASS   (18/18 checks)

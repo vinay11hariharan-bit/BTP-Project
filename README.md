@@ -1,7 +1,7 @@
 # BTP — Low-Power sEMG Gesture Classifier ASIC
 
 B.Tech project, Department of Electrical Engineering, IIT Bombay (BioNICS group, advisor Prof. Laxmeesha Somappa).
-Team: Vinay Hariharan, Sudhindra, Yash, Digvijay.
+Team: Vinay Hariharan, Sudhindra Sahoo, Yashvardhan Khandegar, Digvijay Kumbhar.
 
 Surface EMG from 8–24 forearm electrodes is classified into hand/wrist gestures by a fixed-function,
 fully integer digital core: per-channel time-domain features, an integer shift-normaliser, and an
@@ -11,17 +11,22 @@ FORS-EMG dataset.
 
 ## Headline results
 
-All accuracies are leave-one-subject-out (LOSO) on FORS-EMG, 4 gestures
-(Hand Close, Hand Open, Wrist Flexion, Wrist Extension), mean ± 95% CI over subjects.
+All accuracies are leave-one-subject-out (LOSO) on FORS-EMG: the test subject is never seen in training.
+Mean ± 95% CI over subjects; "pp" = percentage points. The full write-up is the paper
+[`docs/paper/BTP_paper.pdf`](docs/paper/BTP_paper.pdf); raw script outputs are in [`docs/results/`](docs/results/).
 
-| Result | Value |
+| Question | Result |
 |---|---|
-| INT8 LDA, integer front end (software reference) | 77.79 ± 4.39 % |
-| Bit-exact chip model (golden model, 8-bit ADC, chip windows) | 77.82 ± 4.10 % |
-| Model search: MLP / Logistic Regression / LDA on float features | 77.9–79.6 %, statistically tied |
-| INT8 quantisation cost (28 comparisons) | +0.18 pp on average |
-| RTL vs golden model, whole chip, C = 8 … 24 channels | bit-exact (x_q, scores, class) |
-| Worst-case Stage 2 + 3 time (C = 24) | 850 of 1015 cycles per sample at 1 MHz |
+| Which gestures? | Hand Close, Hand Open, Wrist Flexion, Wrist Extension: +14.1 pp over a hand + finger set (p = 3.8 × 10⁻⁹) |
+| Merge all 12 gestures into 4 classes instead of dropping 8? | 60.9 % vs 77.8 %, worse on 19 / 19 subjects; the earlier 6-group map: 72.4 %, still −5.5 pp |
+| Does model capacity help? | MLP, logistic regression, linear SVM and LDA statistically tied (77.9–79.6 %) |
+| Does a raw-signal CNN help? | +1.3 pp (n.s.) and +2.7 pp (p = 0.008) for 3,700–4,700× the MACs (19 subjects) |
+| INT8 cost | +0.18 pp on average over 28 comparisons |
+| Integer front end (add, compare, shift) | 77.79 ± 4.39 % vs 77.88 % with float features |
+| Bit-exact chip model on new users | 77.61 ± 4.34 % (18 subjects), no difference to the software INT8 LDA (p = 0.49) |
+| Per-user calibration, one recording per gesture | LDA 78.0 → 86.4 % (+8.3 pp, 18 / 18 subjects improve) |
+| Calibrated CNN vs calibrated LDA | +2.4 pp for 19 / 19 subjects, below the agreed +3 pp bar, at ≈ 870× the arithmetic: LDA kept |
+| Multi-board RTL (8 ch per board, 256 kHz, 96 bits per decision between boards) | 79 / 79 decisions bit-exact on real data for 6 board splits; 8 / 8 planted bugs caught; 18 / 18 checks |
 
 Details: [`docs/technical_summary.md`](docs/technical_summary.md) (model search) and [`RTL/README.md`](RTL/README.md) (hardware).
 
@@ -46,8 +51,11 @@ Details: [`docs/technical_summary.md`](docs/technical_summary.md) (model search)
 │   └── K_4_LDA_Golden_LOSO.py       chip model vs software LDA on FORS-EMG (paired LOSO)
 ├── RTL/                             Verilog of the chip + chip-level cocotb testbench (RTL/README.md)
 ├── docs/
+│   ├── paper/                       the full paper: LaTeX source, figures, PDF (BTP_paper.pdf)
+│   ├── presentation/                final slides (pptx + pdf) and the chronological waveform diagram
+│   ├── results/                     raw outputs of the scripts behind every number (see results/README.md)
 │   ├── technical_summary.md         model search: preprocessing, INT8 scheme, results
-│   └── report/                      project report (LaTeX source, figures, PDF)
+│   └── report/                      earlier project report (single-chip version, LaTeX, figures, PDF)
 └── archive/                         FORS-EMG dataset (Subject<i>/<orientation>/<gesture>-<trial>.mat)
 ```
 
