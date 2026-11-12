@@ -37,6 +37,7 @@ Details: [`docs/technical_summary.md`](docs/technical_summary.md) (model search)
 │   ├── classifier_classification.py 8-classifier comparison (linear, trees, MLP)
 │   ├── K_4_model_MLP.py             INT8 MLP benchmark, 4 gestures
 │   ├── K_6_model_LR_comparison.py   MLP vs Logistic Regression, best 6-gesture subset
+│   ├── K_4_LDA_Merge_vs_Drop.py     all 12 gestures merged into 4 classes vs dropping 8 (chip LDA)
 │   ├── K_4_LDA_Calib.py             LDA with per-user calibration
 │   ├── K_4_CNN_LOSO.py              raw-signal CNNs vs INT8 LDA
 │   └── K_4_CNN_Calib.py             CNN with per-user fine-tuning
@@ -76,6 +77,8 @@ same filter, windows and folds. Scripts print their results; the older analysis 
 1. **Gesture set.** The original set {Hand Close, Hand Open, Index, Index Little} capped at about 65 %:
    Index ↔ Index Little alone caused about 40 % of errors. Switching to Hand Close, Hand Open, Wrist
    Flexion, Wrist Extension gained +14.1 pp (p = 3.8 × 10⁻⁹). Larger vocabularies: 6 gestures 69.0 %, 12 gestures 48.8 %.
+   Merging all 12 gestures into 4 classes of 3 instead of dropping 8 (grouping chosen from the training
+   subjects) gives 60.9 % against 77.8 %, worse on all 19 subjects, so gestures are dropped.
 2. **Model.** Capacity is not the bottleneck: five MLP widths, Logistic Regression and LDA are
    statistically tied; trees that fit the 10 KB budget are worse. LDA was chosen for the ASIC
    (closed-form training, 160 MACs, 176 B).
