@@ -19,6 +19,8 @@ Grouping, per outer fold:
 MERGE is evaluated two ways, both INT8 like the chip:
   merge-4   a 4-class LDA trained on the merged labels (same chip, 4 class rows).
   12->4     the 12-class LDA, its decision mapped to the group (12 class rows: 3x the MACs).
+Also the earlier design's fixed 6-group map (G1 holds 6 gestures, half of all windows), as a 6-class
+LDA on the merged labels and as the 12-class LDA mapped to the 6 groups.
 
 Everything else is the chip pipeline of golden_model/K_4_LDA_Golden_LOSO.py: causal filter,
 8-bit ADC (one full scale for all 12 gestures), streamed 196-sample windows with a 98-sample
@@ -48,6 +50,9 @@ GESTURES = ["Hand_Close", "Hand_Open", "Index", "Index_Little", "Peace", "Radial
             "Right_Angle", "Thumb_Little", "Thumb_UP", "Ulner_Deviation", "Wrist_Extension", "Wrist_Flexion"]
 SHORT = ["HC", "HO", "Idx", "IdxL", "Peace", "RadD", "RAng", "ThL", "ThUp", "UlnD", "WE", "WF"]
 DROP_SET = [0, 1, 11, 10]             # HC, HO, WF, WE -> classes 0..3
+# the earlier design's fixed map: 12 gestures -> 6 groups (G1 = HC, Idx, IdxL, Peace, RAng, ThUp; G2 = HO, WE;
+# G3 = RadD; G4 = ThL; G5 = UlnD; G6 = WF)
+MAP6 = np.array([0, 1, 0, 0, 0, 2, 0, 3, 0, 4, 1, 5])
 TRAIN_TRIALS = (1, 2, 3, 4)
 C = B.N_CHANNELS
 INNER_FOLDS = 3
@@ -171,7 +176,7 @@ def main():
     print(f"\n  {len(y):,} windows, {len(ids)} subjects, 12 gestures, {raw.shape[1]} features"
           f"   ({time.time() - t0:.0f} s)\n")
 
-    acc = {"drop": [], "merge-4": [], "12->4": [], "12-class": []}
+    acc = {"drop": [], "merge-4": [], "12->4": [], "12-class": [], "6-group": [], "12->6": []}
     chosen = []
     for i, t in enumerate(ids):
         tr = (sid != t) & np.isin(trial, TRAIN_TRIALS)
@@ -198,6 +203,9 @@ def main():
         p12 = predict(int8_lda(q[tr], y[tr]), q[te])
         acc["12->4"].append(np.mean(gmap[p12] == ym[te]))
         acc["12-class"].append(np.mean(p12 == y[te]))
+        y6 = MAP6[y]
+        acc["6-group"].append(np.mean(predict(int8_lda(q[tr], y6[tr]), q[te]) == y6[te]))
+        acc["12->6"].append(np.mean(MAP6[p12] == y6[te]))
         print(f"  [{i + 1:2d}/{len(ids)}] S{t:02d}  drop {acc['drop'][-1]:.2%}  merge-4 {acc['merge-4'][-1]:.2%}"
               f"  12->4 {acc['12->4'][-1]:.2%}  12-class {acc['12-class'][-1]:.2%}   "
               f"groups {name(groups)} (inner {pred_score:.1%})", flush=True)
@@ -206,17 +214,22 @@ def main():
     rows = [["drop: HC, HO, WF, WE", "2/3 of the gestures unused", "4", "160"],
             ["merge-4: 12 gestures in 4 groups", "nothing", "4", "160"],
             ["12->4: 12-class LDA, mapped to groups", "nothing", "12", "480"],
-            ["12-class LDA (reference)", "nothing", "12", "480"]]
-    for r, key in zip(rows, ["drop", "merge-4", "12->4", "12-class"]):
+            ["12-class LDA (reference)", "nothing", "12", "480"],
+            ["6-group map: 6-class LDA (earlier design)", "nothing", "6", "240"],
+            ["6-group map: 12-class LDA, mapped", "nothing", "12", "480"]]
+    for r, key in zip(rows, ["drop", "merge-4", "12->4", "12-class", "6-group", "12->6"]):
         m, h = mean_ci(acc[key])
         r.insert(1, f"{m:.2f} ± {h:.2f}")
     print(tabulate(rows, headers=["Model", "Test INT8 %", "Data dropped", "Class rows", "MACs"], tablefmt="simple"))
     print()
     print(tabulate([["merge-4 vs drop"] + paired(acc["merge-4"], acc["drop"]),
                     ["12->4 vs drop"] + paired(acc["12->4"], acc["drop"]),
-                    ["12->4 vs merge-4"] + paired(acc["12->4"], acc["merge-4"])],
+                    ["12->4 vs merge-4"] + paired(acc["12->4"], acc["merge-4"]),
+                    ["6-group vs drop"] + paired(acc["6-group"], acc["drop"]),
+                    ["12->6 vs drop"] + paired(acc["12->6"], acc["drop"])],
                    headers=["Comparison", "Δ pp", "95% CI", "Wilcoxon p", "Up/Down", "Verdict"], tablefmt="simple"))
 
+    print(f"  (6-group map: G1 holds {np.mean(MAP6[y] == 0):.0%} of all windows, so always answering G1 scores that much)")
     print(f"\n  Groupings chosen across the {len(ids)} folds:")
     counts = {}
     for g in chosen:
