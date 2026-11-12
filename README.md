@@ -88,9 +88,9 @@ same filter, windows and folds. Scripts print their results; the older analysis 
 5. **Verification.** A bit-exact golden model (`golden_model/lda_golden_model.py`) drives exhaustive unit tests and a
    chip-level cocotb testbench; the chip reproduces the golden model's decisions bit for bit.
 
-## Multi-board system (this branch, `multi_board`)
+## Multi-board system (`main`)
 
-The chip on this branch is built to be chained. Each board is one `emg_top` with one 8-channel ADC
+The chip on `main` is built to be chained. Each board is one `emg_top` with one 8-channel ADC
 pod; 1–3 boards in a chain act as one LDA classifier for 8–24 electrodes.
 
 ```
@@ -112,16 +112,22 @@ pod; 1–3 boards in a chain act as one LDA classifier for 8–24 electrodes.
 - **Synchronisation.** One 256 kHz clock for all boards. The head's `core_en` is passed down the chain
   (`run`), so every board's sample timer starts in the same cycle. A wired-AND ready line starts the
   sum transfer once every board has finished Stage 3.
-- **Verified on real data.** `RTL/tb/run_mb.py` feeds subject 6, trial 1 of FORS-EMG (4 gestures,
-  7840 samples) through 1–3 simulated boards. For the splits 8, 4+4 and 3+3+2, all 79 decisions are
-  bit-exact with the golden model, and 72 of 76 single-gesture windows are correct.
+- **Verified.** `python3 RTL/tb/verify_all.py` (from `RTL/`: `python3 tb/verify_all.py`, about 4 min)
+  runs 18 checks and prints ALL PASS or what failed:
+  - `emg_chain_link` alone, 1–4 boards, 3000 random strides each (large, small, negative and tied
+    sums; K−1 = 3, 2, 1), checked against sums and argmax computed inside the testbench;
+  - 8 deliberate bugs put into `emg_chain_link` one at a time: the unit test must catch every one;
+  - the whole chip on subject 6, trial 1 of FORS-EMG (4 gestures, 7840 samples) for the splits
+    8, 4+4, 2+6, 6+2, 5+3 and 3+3+2: all 79 decisions bit-exact with the golden model, which
+    itself equals the original single-chip LDA on all 79. 72 of 76 single-gesture windows are correct.
 
 Details, ports and commands: [`RTL/README.md`](RTL/README.md).
 
 ## Branches
 
-- `main` — the single-board LDA chip (two clocks, up to 24 channels on one core).
-- `multi_board` — the chained version described above.
+- `main` — the chained multi-board version described above.
+- `single_chip` — the earlier single-board LDA chip (two clocks, 1 MHz core, up to 24 channels on one
+  core, cocotb chip test). This was `main` until 12 Nov 2026.
 - `processor_flexibility` — the chip as a configurable feature front end for a microcontroller:
   on-chip LDA removed, real TI ADS1299 ADC interface, SPI slave link to an MCU, on-chip IIR filter,
   configurable windows, fault flags. See `LDAcore_with_proc/README.md` on that branch.

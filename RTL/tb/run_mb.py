@@ -88,9 +88,11 @@ def main():
         e = exp[k + 1]
         ok += cls == e[3]
         rows.append((k + 1, t, cls, e[3], e[2], e[5]))
+    same = sum(e[3] == e[4] for e in exp[1:])
     full = [r for r in rows if not r[5]]
     print(f"{len(dec)} decisions, {ok} equal to the golden model"
           f"{'  -> BIT-EXACT' if ok == len(dec) == len(exp) - 1 else '  -> MISMATCH'}")
+    print(f"golden model = single-chip LDA: {same}/{len(exp) - 1}")
     print(f"accuracy on single-gesture windows: {sum(r[2] == r[4] for r in full)}/{len(full)}")
     print("stride  time_ms  chip  golden  true")
     for r in rows:

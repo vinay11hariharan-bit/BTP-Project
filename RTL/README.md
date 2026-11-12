@@ -1,4 +1,4 @@
-# Branch `multi_board`: up to 8 channels per board, boards in a chain
+# RTL: multi-board LDA core, up to 8 channels per board, boards in a chain
 
 Each board is one `emg_top` with one 8-channel pod. Boards are chained; together they make one
 LDA classifier for 8, 12, 16 or 24 electrodes. Nothing but the K−1 partial sums crosses between
@@ -12,7 +12,7 @@ single-chip LDA. Stages 1–2 are per channel and need no change.
 
 **What changed from `main`.**
 
-| File | Change |
+| File | Change (from the single-chip version, branch `single_chip`) |
 |---|---|
 | `emg_chain_link.v` | **new**: head/tail detection, board id, common enable, barrier, bit-serial adder, head argmax |
 | `emg_top.v` | one clock (`clk_spi` removed), `CMAX = 8`, `SAMPLE_DIV = 260`, Stage 3 with `NCLS = 3`, `u_link` added, `cfg_board` + chain ports |
@@ -41,6 +41,17 @@ flip-flop) and passes the sum on one clock later, and the head compares each tot
 and decides after the last bit (`dec_valid` → `emg_core_ctrl` → `class_valid`, first decision
 masked as before). Configuration addresses as on `main`, plus `0x7F2` = K−1 (default 3).
 
+**Check everything** (from `RTL/`, about 4 min, needs `iverilog`):
+
+```bash
+python3 tb/verify_all.py
+```
+
+It runs the `emg_chain_link` unit test (`tb/tb_chain_unit.v`, 1–4 boards, 3000 random strides each,
+expected values computed inside the testbench), a mutation test (8 planted bugs, each must make the
+unit test fail) and the whole-chip test below for six board splits, then prints ALL PASS or the
+failing checks.
+
 **Test on real FORS-EMG data** (`tb/`):
 
 ```bash
@@ -66,7 +77,12 @@ surfer waveform/mb_4_4.vcd   # or gtkwave: open the chain signals interactively
 
 The cocotb test `tb/test_emg_top.py` is for the two-clock chip on `main` and does not run here.
 
-# RTL on `main` — INT8 LDA gesture-classification core
+# Reference: the single-chip version (branch `single_chip`)
+
+Everything below describes the earlier two-clock, 24-channel chip. The Stage 1–3 modules are the
+same on `main`; the clocking, sizes, pins and timing differ as listed above.
+
+## INT8 LDA gesture-classification core
 
 Fixed-function digital core that turns 8–24 channels of 8-bit EMG samples into one gesture
 decision every ~99.5 ms. Plain Verilog-2005, two clocks, no multiplier except the one 8 × 8 MAC.

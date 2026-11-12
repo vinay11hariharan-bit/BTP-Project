@@ -1,6 +1,6 @@
-// emg_top — one board of the multi-board classifier (branch multi_board). Wiring only.
+// emg_top — one board of the multi-board classifier. Wiring only.
 //
-// Changes from main:
+// Changes from the single-chip version (branch single_chip):
 //   * one clock (clk_sys, 256 kHz): the SPI side runs on it too, so cdc_toggle_sync and
 //     the second rst_sync are gone; frame_start is a toggle edge detect here.
 //   * at most 8 channels per board (CMAX = 8): banks, x_q, mu/k and W memories shrink.
