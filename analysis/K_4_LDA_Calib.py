@@ -11,6 +11,7 @@ FORS-EMG — global INT8 LDA + post-training calibration on one subject
    and the linear layer W, b is recomputed in closed form.
 3. All three (global, 1-trial, 2-trial) are tested on the same TARGET trials,
    none of which is used for calibration; FP32 and INT8 accuracies printed.
+4. The same for every subject as the target, with the paired gain of calibration.
 
 Requires K_4_LDA_Analysis.py (revision 3). Prints results only; writes no files.
 
@@ -20,7 +21,7 @@ Run:  python K_4_LDA_Calib.py
 import copy, time
 import numpy as np
 from joblib import Parallel, delayed
-from scipy.stats import t as student_t
+from scipy.stats import t as student_t, wilcoxon
 from sklearn.metrics import accuracy_score
 from tabulate import tabulate
 
@@ -99,6 +100,24 @@ def loso_fold(X, y, sid, trial, t):
     return scores(lda, Xtr_n, sc.transform(X[te]), y[te])
 
 
+def calib_subject(X, y, sid, trial, t):
+    """INT8 accuracy on trials 3-5 of subject t: global, calibrated with 1 trial, with 2 trials."""
+    idx_tr = np.where((sid != t) & np.isin(trial, TRAIN_TRIALS))[0]
+    used = sorted({u for ts in CALIB_SETS.values() for u in ts})
+    idx_te = np.where((sid == t) & ~np.isin(trial, used))[0]
+    sc = B.ShiftNormalizer()
+    Xtr_n, Xn = sc.fit_transform(X[idx_tr]), sc.transform(X)
+    lda = B.build_lda().fit(Xtr_n, y[idx_tr])
+    Sigma_g = getattr(lda, "covariance_", None)
+    if Sigma_g is None:
+        Sigma_g = class_stats(Xtr_n, y[idx_tr], lda.classes_)[1]
+    out = [scores(lda, Xtr_n, Xn[idx_te], y[idx_te])[1]]
+    for ts in CALIB_SETS.values():
+        ic = np.where((sid == t) & np.isin(trial, ts))[0]
+        out.append(scores(calibrate(lda, Sigma_g, Xn[ic], y[ic], LAMBDA), Xtr_n, Xn[idx_te], y[idx_te])[1])
+    return out
+
+
 def mean_ci(v):
     v = np.asarray(v) * 100
     return f"{v.mean():.2f} ± {student_t.ppf(0.975, len(v) - 1) * v.std(ddof=1) / np.sqrt(len(v)):.2f}"
@@ -146,6 +165,18 @@ def main():
 
     print("\n" + tabulate(rows, headers=["Model", "Calib windows", "Test FP32 %",
                                          "Test INT8 %"], tablefmt="simple"))
+    # every subject as the target
+    res = np.array(Parallel(n_jobs=-1)(delayed(calib_subject)(X, y, sid, trial, t) for t in ids))
+    print(f"\nCalibration on every subject (λ = {LAMBDA}, INT8, test trials 3-5)")
+    print(tabulate([[f"S{t:02d}"] + [f"{v*100:.2f}" for v in r] for t, r in zip(ids, res)],
+                   headers=["Subject", "Global %", "1 trial %", "2 trials %"], tablefmt="simple"))
+    print(tabulate([[f"Mean over {len(ids)} (± 95% CI)"] + [mean_ci(res[:, i]) for i in range(3)]],
+                   headers=["", "Global %", "1 trial %", "2 trials %"], tablefmt="simple"))
+    for i, n in ((1, "1 trial"), (2, "2 trials")):
+        d = (res[:, i] - res[:, 0]) * 100
+        h = student_t.ppf(0.975, len(d) - 1) * d.std(ddof=1) / np.sqrt(len(d))
+        print(f"  {n} vs global: {d.mean():+.2f} pp [{d.mean() - h:+.2f}, {d.mean() + h:+.2f}], "
+              f"Wilcoxon p = {wilcoxon(d).pvalue:.2g}, up/down {(d > 0).sum()}/{(d < 0).sum()}")
     print(f"\nFeatures {t_feat:.1f} s | total {time.time() - t0:.1f} s")
 
 
