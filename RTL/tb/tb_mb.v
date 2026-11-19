@@ -4,12 +4,14 @@
 // parameters, writes the configuration file and checks the decisions.
 //
 //   board 0 (head) channels 0 .. C0-1, board 1 the next C1, board 2 the next C2.
-//   CONVST of the head paces the stream: one new 8-channel sample per CONVST.
+//   CONVST of the head paces the stream: one new CT-channel sample per CONVST
+//   (CT = C0 + C1 + C2 electrodes in total, up to 24; channel 0 in the top byte).
 //   Printed lines:  DEC <n> <class> <time_us>   for every decision at the head.
 module tb;
     parameter NB  = 2;              // boards
     parameter C0  = 4, C1 = 4, C2 = 0;
     parameter NS  = 7840;           // samples in the stream
+    parameter CT  = 8;              // electrodes in the stream (= C0 + C1 + C2)
     parameter CFG = "cfg.txt";
     parameter VCD = "mb.vcd";
 
@@ -27,9 +29,10 @@ module tb;
     reg [1:0]  cfg_board = 2'd0;
 
     // ------------------------------------------------------------ sample stream
-    reg [63:0] smem [0:NS-1];
+    reg [8*CT-1:0] smem [0:NS-1];
     integer    si = 0;
-    reg [63:0] cur;
+    reg [8*CT-1:0] cur;
+    wire [191:0]   wide = {cur, {(8*(24-CT)){1'b0}}};   // stream padded to 24 channels, ch0 on top
     initial begin
         $readmemh("mb_data/samples.txt", smem);
         cur = smem[0];
@@ -88,9 +91,27 @@ module tb;
             .sdi       (1'b0),
             .sdo       (miso[j]),
             .drdy_n    (drdy_n[j]),
-            .sample_in (cur << (8 * OFF))    // this board's channels first
+            .sample_in (wide[191 - 8 * OFF -: 64])    // this board's channels first
         );
+
+        // this board, by phase: reset/identity, config, start, sampling, Stage 2-3, chain, decision
+        initial #0.001 $dumpvars(0,
+            u_chip.rst_sys_n, u_chip.u_link.is_head, u_chip.u_link.is_tail, u_chip.my_id,
+            u_chip.cfg_we_b, u_chip.cfg_n_ch, u_chip.u_link.nwords,
+            u_chip.core_en, u_chip.u_link.head_en, u_chip.run,
+            u_chip.frame_start,
+            u_chip.stride_done, u_chip.norm_busy, u_chip.mac_busy,
+            u_chip.score_valid, u_chip.score_cls, u_chip.score,
+            u_chip.u_link.go, u_chip.u_link.word, u_chip.u_link.bit_n, u_chip.u_link.carry,
+            u_chip.u_link.shreg, u_chip.u_link.best, u_chip.u_link.best_cls,
+            u_chip.u_link.dec_valid, u_chip.u_link.dec_cls, u_chip.class_out);
     end endgenerate
+
+    // Waveform: the shared nets here, each board's own signals in the generate block below.
+    // Everything is dumped from 1 ps (all $dumpvars calls must be at the same time step).
+    // Only slow or short-lived signals are kept, so the 8 s run stays about 1-2 MB.
+    initial #0.001 $dumpvars(0, arst_n, cfg_we, cfg_board, cfg_addr, cfg_wdata,
+                                convst, cs_n, rdy, all_rdy, dat, vld, cls_valid, primed, si);
 
     // next sample after every CONVST of the head (the pods have latched the current one)
     always @(negedge convst[0]) if (arst_n) begin      // (the X -> 0 at reset is not a CONVST)
@@ -115,14 +136,6 @@ module tb;
 
     initial begin
         $dumpfile(VCD);
-        // a few signals only: the whole 8 s run stays small
-        $dumpvars(0, convst, cs_n, rdy, all_rdy, dat, vld, cls_valid, primed, si);
-        $dumpvars(0, brd[0].u_chip.class_out, brd[0].u_chip.u_link.dec_valid,
-                     brd[0].u_chip.u_link.dec_cls, brd[0].u_chip.u_link.best);
-        $dumpvars(0, brd[0].u_chip.stride_done, brd[0].u_chip.mac_busy,
-                     brd[0].u_chip.score_valid, brd[0].u_chip.score_cls, brd[0].u_chip.score);
-        if (NB > 1) $dumpvars(0, brd[1].u_chip.stride_done, brd[1].u_chip.mac_busy,
-                     brd[1].u_chip.score_valid, brd[1].u_chip.score_cls, brd[1].u_chip.score);
 
         #20000 arst_n = 1'b1;
         #20000;

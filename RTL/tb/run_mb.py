@@ -3,6 +3,7 @@
     python tb/run_mb.py              # from RTL/, default split 4,4 (two boards)
     python tb/run_mb.py 3,3,2        # three boards
     python tb/run_mb.py 8            # one board (head = tail)
+    python tb/run_mb.py 8,4          # 12 electrodes (NinaPro DB2 from ninapro_prepare.py): 8,4 | 6,6 | 4,4,4 ...
 
 Needs mb_data/ from mb_prepare.py. Writes the board configuration to sim_build_mb/,
 the waveform to waveform/mb_<split>.vcd, and prints the comparison with the golden model.
@@ -59,7 +60,10 @@ def write_cfg(split, path):
 
 def main():
     split = [int(v) for v in (sys.argv[1] if len(sys.argv) > 1 else "4,4").split(",")]
-    assert sum(split) == 8 and 1 <= len(split) <= 3 and max(split) <= 8, "8 channels over 1-3 boards"
+    mu, _, _ = load_model()
+    ct = len(mu) // 5                                   # electrodes in the model / stream
+    assert sum(split) == ct and 1 <= len(split) <= 3 and max(split) <= 8, \
+        f"the model has {ct} channels: split them over 1-3 boards, at most 8 per board"
     tag = "_".join(map(str, split))
     build = TB / "sim_build_mb"
     build.mkdir(exist_ok=True)
@@ -74,7 +78,7 @@ def main():
     src = sorted(str(p) for p in RTL.glob("*.v")) + [str(TB / "adc_pod_model.v"), str(TB / "tb_mb.v")]
     subprocess.run(["iverilog", "-g2005", "-o", str(vvp), "-s", "tb",
                     f"-Ptb.NB={len(split)}", f"-Ptb.C0={c[0]}", f"-Ptb.C1={c[1]}", f"-Ptb.C2={c[2]}",
-                    f"-Ptb.NS={ns}", f'-Ptb.CFG="{cfg}"', f'-Ptb.VCD="{RTL / "waveform" / f"mb_{tag}.vcd"}"'] + src,
+                    f"-Ptb.NS={ns}", f"-Ptb.CT={ct}", f'-Ptb.CFG="{cfg}"', f'-Ptb.VCD="{RTL / "waveform" / f"mb_{tag}.vcd"}"'] + src,
                    check=True)
     print(f"split {split}: {n} config writes, {ns} samples, running ...")
     out = subprocess.run(["vvp", "-n", str(vvp)], cwd=TB, capture_output=True, text=True).stdout
