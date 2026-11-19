@@ -16,6 +16,8 @@ Gestures (DB2 exercise-B labels, the same mapping as the Calibration checkpoint,
   3. 8-bit ADC with one fixed gain from the training subjects; chip features and shift
      normaliser from lda_golden_model.py; LDA from K_4_LDA_Analysis.py; multi-board
      K-1 difference form W'_c = W_c - W_0, b'_c = b_c - b_0, INT8 / INT32, as mb_prepare.py.
+  3b. --calib N: method C of the Calibration checkpoint (re-centre on the user, blend the general
+     per-gesture summaries with N of the user's repetitions, share chosen on a validation repetition).
   4. Leave-one-subject-out accuracy of exactly that integer decision for every subject
      (--loso), and a test stream for TEST_SUBJECT: the most active 2 s of each gesture in
      repetition TEST_REP, joined into one stream, with the golden decision of every stride.
@@ -24,6 +26,7 @@ Writes RTL/tb/mb_data/ (same files as mb_prepare.py, so tb/run_mb.py runs unchan
 This overwrites the committed FORS-EMG case; `git checkout RTL/tb/mb_data` brings it back.
 
     python RTL/tb/ninapro_prepare.py --data /path/to/ninapro_db2 --test 1 [--loso]
+    python RTL/tb/ninapro_prepare.py --data /path/to/ninapro_db2 --test 1 --loso --calib 1   # method C
 """
 import argparse
 import re
@@ -89,20 +92,158 @@ def features(subj, sids, full_scale):
     return np.vstack(R), np.array(Y)
 
 
-def train(subj, test_sid):
-    """Chip model trained on every subject except test_sid."""
-    tr = [s for s in subj if s != test_sid]
-    full_scale = float(np.percentile(np.abs(np.vstack([r[0] for s in tr for r in subj[s]])), FS_PCT))
-    raw, y = features(subj, tr, full_scale)
-    mu, k = G.calibrate_norm(raw)
-    lda = B.build_lda().fit(G.normalize(raw, mu, k), y)
-    Wf, bf = (np.asarray(a, float) for a in B.lda_as_linear_layer(lda))
-    assert list(lda.classes_) == list(range(len(GESTURES)))
+def full_scale_of(subj, sids):
+    """ADC gain: one fixed full scale from the training subjects (a hardware constant)."""
+    return float(np.percentile(np.abs(np.vstack([r[0] for s in sids for r in subj[s]])), FS_PCT))
+
+
+def pack(Wf, bf, mu, k, full_scale):
+    """Float LDA (K x D, K) -> chip numbers: single-chip INT8 rows and the multi-board K-1 difference form."""
     W6, b6 = G.quantize_lda(Wf, bf)                          # single-chip INT8 model
     Wd, bd = Wf[1:] - Wf[0], bf[1:] - bf[0]                  # multi-board K-1 difference form
     s = np.abs(Wd).max() / 127
     return dict(full_scale=full_scale, mu=mu, k=k, W6=W6, b6=b6,
                 Wq=np.round(Wd / s).astype(np.int64), bq=np.round(bd / s).astype(np.int64))
+
+
+def train(subj, test_sid):
+    """Chip model trained on every subject except test_sid (no calibration)."""
+    tr = [s for s in subj if s != test_sid]
+    full_scale = full_scale_of(subj, tr)
+    raw, y = features(subj, tr, full_scale)
+    mu, k = G.calibrate_norm(raw)
+    lda = B.build_lda().fit(G.normalize(raw, mu, k), y)
+    Wf, bf = (np.asarray(a, float) for a in B.lda_as_linear_layer(lda))
+    assert list(lda.classes_) == list(range(len(GESTURES)))
+    return pack(Wf, bf, mu, k, full_scale)
+
+
+# ---------------------------------------------------------------- calibration: method C of the Calibration checkpoint
+#
+#   1. Re-centre: every person's features are measured from their own centre (the mean of their
+#      per-gesture means), so the chip's input offset mu becomes the user's own centre mu'.
+#      The shift k stays the general one, so the general and the user's numbers live in one space.
+#   2. Summaries per gesture (count, sum, sum of products) of the re-centred INT8 inputs q:
+#      general = the other subjects, user = the calibration repetitions.
+#   3. Blend with the share s (0 = general only, 1 = user only): class means and the pooled
+#      within-gesture covariance are mixed (1-s) * general + s * user.
+#   4. LDA formula (equal priors, small shrinkage) -> INT8 / K-1 difference form, as without calibration.
+#   The chip is unchanged: calibration only writes new mu', W', b'.
+
+SHRINK = 0.1                    # covariance shrinkage towards its mean variance (user data is small)
+SHARES = (0.0, 0.2, 0.4, 0.6, 0.8, 0.9, 1.0)
+
+
+def person_feats(subj, sid, full_scale):
+    """Full windows of one subject: raw sums, gesture, repetition."""
+    R, Y, P = [], [], []
+    for sig, g, rep in subj[sid]:
+        raw, full = G.window_features(G.to_adc_int8(sig, full_scale), len(CHANNELS))
+        n = int(full.sum())
+        R.append(raw[full]); Y += [g] * n; P += [rep] * n
+    return np.vstack(R), np.array(Y), np.array(P)
+
+
+def centre(raw, y):
+    """Re-centring offset: mean of the per-gesture means (every gesture counts equally)."""
+    return np.round(np.mean([raw[y == c].mean(0) for c in np.unique(y)], axis=0)).astype(np.int64)
+
+
+def summary(q, y):
+    K = len(GESTURES)
+    q = q.astype(np.float64)
+    return dict(n=np.array([(y == c).sum() for c in range(K)], float),
+                S=np.array([q[y == c].sum(0) for c in range(K)]),
+                P=np.array([q[y == c].T @ q[y == c] for c in range(K)]))
+
+
+def add(a, b):
+    return {key: a[key] + b[key] for key in a}
+
+
+def moments(sm):
+    m = sm["S"] / sm["n"][:, None]
+    scatter = sum(sm["P"][c] - sm["n"][c] * np.outer(m[c], m[c]) for c in range(len(m)))
+    return m, scatter / sm["n"].sum()
+
+
+def lda_blend(gen, user, share):
+    """Method C blend of two summaries -> float LDA (W, b), equal priors."""
+    mg, Cg = moments(gen)
+    if user is None or share == 0:
+        m, C = mg, Cg
+    else:
+        mu_, Cu = moments(user)
+        m, C = (1 - share) * mg + share * mu_, (1 - share) * Cg + share * Cu
+    C = (1 - SHRINK) * C + SHRINK * np.trace(C) / len(C) * np.eye(len(C))
+    W = np.linalg.solve(C, m.T).T
+    b = -0.5 * np.einsum("kd,kd->k", W, m)
+    return W, b
+
+
+class Fold:
+    """Everything for one held-out user that does not depend on the calibration repetitions."""
+
+    def __init__(self, subj, user):
+        self.tr = [s for s in subj if s != user]
+        self.full_scale = full_scale_of(subj, self.tr)
+        F = {s: person_feats(subj, s, self.full_scale) for s in subj}
+        cen = {s: centre(F[s][0], F[s][1]) for s in self.tr}
+        _, self.k = G.calibrate_norm(np.vstack([F[s][0] - cen[s] for s in self.tr]))
+        self.gen = None
+        for s in self.tr:
+            sm = summary(G.normalize(F[s][0], cen[s], self.k), F[s][1])
+            self.gen = sm if self.gen is None else add(self.gen, sm)
+        # the uncalibrated model of train(), on the same features
+        raw = np.vstack([F[s][0] for s in self.tr]); y = np.concatenate([F[s][1] for s in self.tr])
+        mu0, k0 = G.calibrate_norm(raw)
+        lda = B.build_lda().fit(G.normalize(raw, mu0, k0), y)
+        self.base = pack(*(np.asarray(a, float) for a in B.lda_as_linear_layer(lda)), mu0, k0, self.full_scale)
+        self.raw, self.y, self.rep = F[user]
+
+    def calibrated(self, calib_reps, share):
+        sel = np.isin(self.rep, calib_reps)
+        mu_u = centre(self.raw[sel], self.y[sel])
+        user = summary(G.normalize(self.raw[sel], mu_u, self.k), self.y[sel])
+        return pack(*lda_blend(self.gen, user, share), mu_u, self.k, self.full_scale)
+
+    def acc(self, m, reps):
+        sel = np.isin(self.rep, reps)
+        return np.mean(decide(G.normalize(self.raw[sel], m["mu"], m["k"]), m["Wq"], m["bq"]) == self.y[sel]) * 100
+
+
+def calib_eval(subj, n_cal):
+    """Rotating repetitions per user (as the checkpoint's DB2 Part 2): 1 test, 1 validation, n_cal calibration.
+    One share for everyone, chosen on the validation repetitions; reported on the test repetitions."""
+    val = {s: [] for s in SHARES}; test = {s: [] for s in SHARES}; base = []
+    users = sorted(subj)
+    for u in users:
+        f = Fold(subj, u)
+        reps = sorted(set(f.rep.tolist()))
+        assert len(reps) >= n_cal + 2, f"subject {u}: {len(reps)} repetitions, need {n_cal + 2}"
+        v_u = {s: [] for s in SHARES}; t_u = {s: [] for s in SHARES}; b_u = []
+        for r in range(len(reps)):
+            t, v = reps[r], reps[(r + 1) % len(reps)]
+            cal = [reps[(r + 2 + i) % len(reps)] for i in range(n_cal)]
+            b_u.append(f.acc(f.base, [t]))
+            for s in SHARES:
+                m = f.calibrated(cal, s)
+                v_u[s].append(f.acc(m, [v])); t_u[s].append(f.acc(m, [t]))
+        base.append(np.mean(b_u))
+        for s in SHARES:
+            val[s].append(np.mean(v_u[s])); test[s].append(np.mean(t_u[s]))
+        print(f"user {u:2d}: no calibration {base[-1]:5.1f} %   C, {n_cal} rep: "
+              + "  ".join(f"s={s:.1f} {test[s][-1]:5.1f}" for s in SHARES))
+    best = max(SHARES, key=lambda s: np.mean(val[s]))
+    a, b = np.array(test[best]), np.array(base)
+    ci = lambda x: 1.96 * x.std(ddof=1) / np.sqrt(len(x)) if len(x) > 1 else 0.0
+    print(f"\nshare chosen on the validation repetitions: {best}  "
+          f"(validation mean per share: " + ", ".join(f"{s}: {np.mean(val[s]):.1f}" for s in SHARES) + ")")
+    print(f"no calibration (general model, same test repetitions): {b.mean():.2f} % +/- {ci(b):.2f}")
+    print(f"method C, {n_cal} calibration repetition(s), share {best}:  {a.mean():.2f} % +/- {ci(a):.2f}")
+    print(f"gain: {(a - b).mean():+.2f} points +/- {ci(a - b):.2f} (95% CI), "
+          f"{int((a > b).sum())} of {len(a)} users improve, worst change {(a - b).min():+.1f}")
+    return best
 
 
 def decide(q, Wq, bq):
@@ -125,13 +266,25 @@ def loso(subj):
           f"(95% CI, {len(a)} subjects), chance {100 / len(GESTURES):.0f} %")
 
 
-def write_case(subj, test_sid, test_rep):
-    m = train(subj, test_sid)
+def write_case(subj, test_sid, test_rep, n_cal=0, share=0.8):
+    if n_cal:
+        f = Fold(subj, test_sid)
+        reps = sorted(set(f.rep.tolist()))
+        assert test_rep in reps, f"subject {test_sid} has no repetition {test_rep}"
+        others = [r for r in reps if r != test_rep]
+        cal = others[:n_cal]
+        m = f.calibrated(cal, share)
+        print(f"calibrated (method C) on repetitions {cal} of subject {test_sid}, share {share}; "
+              f"accuracy on repetition {test_rep}: {f.acc(m, [test_rep]):.1f} % "
+              f"(no calibration {f.acc(f.base, [test_rep]):.1f} %)")
+        note = f"calibrated (method C, reps {cal}, share {share})"
+    else:
+        m = train(subj, test_sid)
+        note = "no calibration"
     names = list(GESTURES.values())
     seg, lab = [], []
     for g in range(len(GESTURES)):
-        recs = [r for r in subj[test_sid] if r[1] == g and r[2] == test_rep] or \
-               [r for r in subj[test_sid] if r[1] == g]
+        recs = [r for r in subj[test_sid] if r[1] == g and r[2] == test_rep]
         assert recs, f"subject {test_sid} has no repetition of {names[g]}"
         x = G.to_adc_int8(recs[0][0], m["full_scale"]).astype(np.int64)
         n = min(SEG, len(x))
@@ -160,7 +313,7 @@ def write_case(subj, test_sid, test_rep):
         for n, (smp, l) in enumerate(zip(stream, lab)):
             f.write(f"{n},{l}," + ",".join(str(int(v)) for v in smp) + "\n")
     with open(OUT / "model.txt", "w") as f:
-        f.write(f"# NinaPro DB2: subject {test_sid} held out; trained on the other subjects\n")
+        f.write(f"# NinaPro DB2: subject {test_sid} held out; trained on the other subjects; {note}\n")
         f.write(f"# per feature f = 5*ch + t: mu k ; then W' rows (c = 1..{NDIFF}, {D} values) ; then b'\n")
         for i in range(D):
             f.write(f"mu {i} {m['mu'][i]} {m['k'][i]}\n")
@@ -187,15 +340,23 @@ def main():
     ap.add_argument("--test", type=int, default=1, help="held-out subject for the RTL test stream")
     ap.add_argument("--rep", type=int, default=1, help="repetition of the held-out subject used in the stream")
     ap.add_argument("--loso", action="store_true", help="also print leave-one-subject-out accuracy for every subject")
+    ap.add_argument("--calib", type=int, default=0, metavar="N",
+                    help="method C calibration with N repetitions of the user (1-3); 0 = none")
+    ap.add_argument("--share", type=float, default=None,
+                    help="blend share for the test stream (default: the one --loso chose, else 0.8)")
     ap.add_argument("--channels", type=int, default=12, choices=range(1, 25), metavar="N",
                     help="use DB2 electrodes 0..N-1 (default 12 = all; 8 = the ring only)")
     a = ap.parse_args()
     CHANNELS[:] = list(range(a.channels))
     subj = load_all(a.data)
     assert a.test in subj, f"subject {a.test} not found"
-    if a.loso:
+    share = a.share
+    if a.loso and a.calib:
+        best = calib_eval(subj, a.calib)
+        share = best if share is None else share
+    elif a.loso:
         loso(subj)
-    write_case(subj, a.test, a.rep)
+    write_case(subj, a.test, a.rep, a.calib, 0.8 if share is None else share)
 
 
 if __name__ == "__main__":
