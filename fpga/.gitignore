@@ -1,0 +1,6 @@
+out/
+vivado_proj/
+*.jou
+*.log
+.Xil/
+tb.vvp
