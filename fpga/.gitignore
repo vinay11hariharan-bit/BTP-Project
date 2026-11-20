@@ -4,3 +4,4 @@ vivado_proj/
 *.log
 .Xil/
 tb.vvp
+__pycache__/
